@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1.7
+
 ARG BUILDER_IMAGE="deepthink-registry.us-east-1.cr.aliyuncs.com/deepthink/base-openmontage:py3.11-node22-bookworm-build-20260817@sha256:29a3d14090c4ae0e440cb0618478b650b347ea8f682ae3a7ba9ddc3518f3532c"
 ARG RUNTIME_IMAGE="deepthink-registry.us-east-1.cr.aliyuncs.com/deepthink/base-openmontage:py3.11-node22-bookworm-20260817@sha256:be2ee7b358e5768fc6c2b68b42d0c63b1a0c2756afcd9325832ea1b974b03b6c"
 
@@ -32,16 +34,32 @@ RUN --mount=type=cache,target=/home/node/.npm,uid=1000,gid=1000 \
     && npm audit --omit=dev --audit-level=high \
     && npx remotion browser ensure
 
+FROM dependencies AS test
+
+WORKDIR /workspace
+
+COPY --chown=1000:1000 requirements-dev.txt ./requirements-dev.txt
+
+RUN --mount=type=cache,target=/home/node/.cache/pip,uid=1000,gid=1000 \
+    python -m pip install --requirement requirements-dev.txt
+
+COPY --chown=1000:1000 . .
+COPY --from=test-suite --chown=1000:1000 / ./tests
+
+CMD ["python", "-m", "pytest", "tests", "-q"]
+
 FROM ${RUNTIME_IMAGE} AS runtime
 
 ARG BUILD_DATE="unknown"
 ARG VCS_REF="unknown"
+ARG VERSION="unknown"
 
 LABEL org.opencontainers.image.title="OpenMontage" \
       org.opencontainers.image.description="OpenMontage video production runtime with Backlot, Remotion, FFmpeg, and optional Piper TTS" \
       org.opencontainers.image.source="https://github.com/iranyxiao-lab/OpenMontage" \
       org.opencontainers.image.created="${BUILD_DATE}" \
-      org.opencontainers.image.revision="${VCS_REF}"
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.version="${VERSION}"
 
 ENV VIRTUAL_ENV="/opt/openmontage/venv" \
     PATH="/opt/openmontage/venv/bin:${PATH}" \
