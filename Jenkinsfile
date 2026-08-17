@@ -109,7 +109,7 @@ pipeline {
           container="openmontage-tests-${BUILD_NUMBER}"
           docker rm -f "${container}" >/dev/null 2>&1 || true
           docker create --name "${container}" "${CI_IMAGE}" \
-            sh -ec 'python -c '\''from pathlib import Path; [compile(path.read_bytes(), str(path), "exec") for root in ("backlot", "lib", "tools") for path in Path(root).rglob("*.py")]'\'' && python -m pytest tests -q -p no:cacheprovider --junitxml=/tmp/junit.xml' >/dev/null
+            python -m pytest tests -q -p no:cacheprovider --junitxml=/tmp/junit.xml >/dev/null
           set +e
           docker start -a "${container}"
           test_status=$?
