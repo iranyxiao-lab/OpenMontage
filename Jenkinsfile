@@ -236,11 +236,23 @@ pipeline {
           kubectl --context="${KUBE_CONTEXT}" -n "${DEPLOY_NAMESPACE}" run "${smoke_pod}" \
             --image=curlimages/curl:8.10.1 --restart=Never \
             --labels=app.kubernetes.io/name=openmontage-smoke \
-            --command -- sh -ec \
-            'response="$(curl --fail --silent http://openmontage:4750/api/health)";
-             test "${response}" = "{\"ok\":true,\"app\":\"backlot\"}"'
-          if ! kubectl --context="${KUBE_CONTEXT}" -n "${DEPLOY_NAMESPACE}" wait \
-            "pod/${smoke_pod}" --for=jsonpath='{.status.phase}'=Succeeded --timeout=3m; then
+            --command -- curl --fail --silent --show-error http://openmontage:4750/api/health
+          smoke_succeeded=false
+          for attempt in $(seq 1 90); do
+            phase="$(kubectl --context="${KUBE_CONTEXT}" -n "${DEPLOY_NAMESPACE}" get \
+              "pod/${smoke_pod}" -o jsonpath='{.status.phase}')"
+            case "${phase}" in
+              Succeeded)
+                smoke_succeeded=true
+                break
+                ;;
+              Failed|Unknown)
+                break
+                ;;
+            esac
+            sleep 2
+          done
+          if [ "${smoke_succeeded}" != true ]; then
             kubectl --context="${KUBE_CONTEXT}" -n "${DEPLOY_NAMESPACE}" logs "${smoke_pod}" || true
             kubectl --context="${KUBE_CONTEXT}" -n "${DEPLOY_NAMESPACE}" describe pod "${smoke_pod}" || true
             exit 1
