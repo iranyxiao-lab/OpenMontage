@@ -160,11 +160,17 @@ kind: Service
 metadata:
   name: openmontage
   namespace: test
+  annotations:
+    service.beta.kubernetes.io/alibaba-cloud-loadbalancer-address-type: internet
+    service.beta.kubernetes.io/alibaba-cloud-loadbalancer-ip-version: ipv4
+    service.beta.kubernetes.io/alibaba-cloud-loadbalancer-name: openmontage-test-nlb
+    service.beta.kubernetes.io/alibaba-cloud-loadbalancer-zone-maps: us-east-1a:vsw-0xinlvshytu31myqnf6rz,us-east-1b:vsw-0xiufxcui5ysql9uvtucn
   labels:
     app.kubernetes.io/name: openmontage
     app.kubernetes.io/part-of: soulx
 spec:
-  type: ClusterIP
+  type: LoadBalancer
+  loadBalancerClass: alibabacloud.com/nlb
   selector:
     app.kubernetes.io/name: openmontage
   ports:

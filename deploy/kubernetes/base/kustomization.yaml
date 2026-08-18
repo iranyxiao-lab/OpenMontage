@@ -1,0 +1,47 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: openmontage-test
+commonLabels:
+  app.kubernetes.io/part-of: openmontage
+resources:
+  - serviceaccount.yaml
+  - workers.yaml
+  - metrics-service.yaml
+  - policies.yaml
+  - quota.yaml
+patches:
+  - target:
+      kind: Deployment
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/envFrom
+        value:
+          - secretRef:
+              name: openmontage-oss
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: OPENMONTAGE_OBJECT_STORE, value: oss}
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: OPENMONTAGE_OSS_BUCKET, value: openmontage-oss}
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: OPENMONTAGE_REQUIRE_GRANTS, value: "true"}
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: ALIBABA_CLOUD_OIDC_TOKEN_FILE, value: /var/run/secrets/oss-identity/token}
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: ALIBABA_CLOUD_ROLE_SESSION_NAME
+          valueFrom: {fieldRef: {fieldPath: metadata.name}}
+      - op: add
+        path: /spec/template/spec/containers/0/volumeMounts/-
+        value: {name: oss-identity, mountPath: /var/run/secrets/oss-identity, readOnly: true}
+      - op: add
+        path: /spec/template/spec/volumes/-
+        value:
+          name: oss-identity
+          projected:
+            sources:
+              - serviceAccountToken: {audience: sts.aliyuncs.com, expirationSeconds: 900, path: token}

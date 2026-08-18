@@ -1,0 +1,19 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: openmontage-render-stable
+  namespace: openmontage-prod
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: openmontage-render-stable
+  minReplicas: 2
+  maxReplicas: 12
+  behavior:
+    scaleDown: {stabilizationWindowSeconds: 300}
+  metrics:
+    - type: External
+      external:
+        metric: {name: openmontage_render_queue_depth}
+        target: {type: AverageValue, averageValue: "5"}

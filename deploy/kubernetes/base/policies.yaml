@@ -1,0 +1,32 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: openmontage-default-deny
+  namespace: openmontage-test
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: openmontage-approved-egress
+  namespace: openmontage-test
+spec:
+  podSelector: {matchLabels: {app.kubernetes.io/part-of: openmontage}}
+  policyTypes: [Egress]
+  egress:
+    - to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}}]
+      ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
+    - to: [{namespaceSelector: {matchLabels: {openmontage.redis-access: "true"}}}]
+      ports: [{protocol: TCP, port: 6379}]
+    - to: [{namespaceSelector: {matchLabels: {openmontage.control-plane: "true"}}}]
+      ports: [{protocol: TCP, port: 18300}]
+    # NetworkPolicy has no portable FQDN selector. Restrict public OSS traffic to
+    # TLS and exclude private/link-local ranges; production may narrow this with
+    # the cluster CNI's FQDN policy for the configured OSS endpoint.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 100.64.0.0/10, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16]
+      ports: [{protocol: TCP, port: 443}]

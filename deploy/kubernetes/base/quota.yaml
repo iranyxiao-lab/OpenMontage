@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: ResourceQuota
+metadata: {name: openmontage-quota, namespace: openmontage-test}
+spec: {hard: {requests.cpu: "12", requests.memory: 24Gi, limits.cpu: "32", limits.memory: 64Gi, pods: "20", requests.ephemeral-storage: 80Gi}}
+---
+apiVersion: v1
+kind: LimitRange
+metadata: {name: openmontage-defaults, namespace: openmontage-test}
+spec:
+  limits:
+    - type: Container
+      default: {cpu: "2", memory: 2Gi, ephemeral-storage: 4Gi}
+      defaultRequest: {cpu: 250m, memory: 512Mi, ephemeral-storage: 1Gi}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: openmontage-planner-stable, namespace: openmontage-test}
+spec: {minAvailable: 1, selector: {matchLabels: {openmontage.pool: planner, openmontage.channel: stable}}}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: openmontage-render-stable, namespace: openmontage-test}
+spec: {minAvailable: 1, selector: {matchLabels: {openmontage.pool: render, openmontage.channel: stable}}}

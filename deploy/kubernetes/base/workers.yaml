@@ -1,0 +1,138 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openmontage-planner-stable
+  namespace: openmontage-test
+spec:
+  replicas: 2
+  strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 0, maxSurge: 1}}
+  selector: {matchLabels: {openmontage.pool: planner, openmontage.channel: stable}}
+  template:
+    metadata: {labels: {openmontage.pool: planner, openmontage.channel: stable}}
+    spec:
+      serviceAccountName: openmontage-runner
+      terminationGracePeriodSeconds: 900
+      securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, seccompProfile: {type: RuntimeDefault}}
+      topologySpreadConstraints: [{maxSkew: 1, topologyKey: kubernetes.io/hostname, whenUnsatisfiable: DoNotSchedule, labelSelector: {matchLabels: {openmontage.pool: planner, openmontage.channel: stable}}}]
+      containers:
+        - name: runner
+          image: openmontage-runner:base
+          command: ["python", "-m", "openmontage.runner.worker"]
+          env: [{name: OPENMONTAGE_CHANNEL, value: stable}, {name: OPENMONTAGE_POOL, value: openmontage-planner}, {name: OPENMONTAGE_NAMESPACE, valueFrom: {fieldRef: {fieldPath: metadata.namespace}}}, {name: POD_UID, valueFrom: {fieldRef: {fieldPath: metadata.uid}}}]
+          ports: [{name: metrics, containerPort: 4751}]
+          readinessProbe: {httpGet: {path: /readyz, port: metrics}, periodSeconds: 5, failureThreshold: 2}
+          livenessProbe: {httpGet: {path: /healthz, port: metrics}, periodSeconds: 30}
+          lifecycle: {preStop: {exec: {command: ["sh", "-c", "kill -TERM 1; sleep 10"]}}}
+          resources: {requests: {cpu: 250m, memory: 512Mi, ephemeral-storage: 1Gi}, limits: {cpu: "2", memory: 2Gi, ephemeral-storage: 4Gi}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts: [{name: tmp, mountPath: /tmp}, {name: token, mountPath: /var/run/secrets/tokens, readOnly: true}]
+      volumes:
+        - {name: tmp, emptyDir: {sizeLimit: 4Gi}}
+        - name: token
+          projected:
+            sources: [{serviceAccountToken: {audience: biz-module-llm, expirationSeconds: 900, path: token}}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openmontage-planner-canary
+  namespace: openmontage-test
+spec:
+  replicas: 1
+  selector: {matchLabels: {openmontage.pool: planner, openmontage.channel: canary}}
+  template:
+    metadata: {labels: {openmontage.pool: planner, openmontage.channel: canary}}
+    spec:
+      serviceAccountName: openmontage-runner
+      terminationGracePeriodSeconds: 900
+      securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, seccompProfile: {type: RuntimeDefault}}
+      topologySpreadConstraints: [{maxSkew: 1, topologyKey: kubernetes.io/hostname, whenUnsatisfiable: DoNotSchedule, labelSelector: {matchLabels: {openmontage.pool: planner, openmontage.channel: canary}}}]
+      containers:
+        - name: runner
+          image: openmontage-runner:base
+          command: ["python", "-m", "openmontage.runner.worker"]
+          env: [{name: OPENMONTAGE_CHANNEL, value: canary}, {name: OPENMONTAGE_POOL, value: openmontage-planner}]
+          ports: [{name: metrics, containerPort: 4751}]
+          readinessProbe: {httpGet: {path: /readyz, port: metrics}, periodSeconds: 5}
+          resources: {requests: {cpu: 250m, memory: 512Mi}, limits: {cpu: "2", memory: 2Gi}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts: [{name: token, mountPath: /var/run/secrets/tokens, readOnly: true}]
+      volumes: [{name: token, projected: {sources: [{serviceAccountToken: {audience: biz-module-llm, expirationSeconds: 900, path: token}}]}}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openmontage-render-stable
+  namespace: openmontage-test
+spec:
+  replicas: 2
+  strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 0, maxSurge: 1}}
+  selector: {matchLabels: {openmontage.pool: render, openmontage.channel: stable}}
+  template:
+    metadata: {labels: {openmontage.pool: render, openmontage.channel: stable}}
+    spec:
+      serviceAccountName: openmontage-runner
+      terminationGracePeriodSeconds: 900
+      securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, seccompProfile: {type: RuntimeDefault}}
+      topologySpreadConstraints: [{maxSkew: 1, topologyKey: kubernetes.io/hostname, whenUnsatisfiable: DoNotSchedule, labelSelector: {matchLabels: {openmontage.pool: render, openmontage.channel: stable}}}]
+      containers:
+        - name: runner
+          image: openmontage-runner:base
+          command: ["python", "-m", "openmontage.runner.worker"]
+          env: [{name: OPENMONTAGE_CHANNEL, value: stable}, {name: OPENMONTAGE_POOL, value: openmontage-render}]
+          ports: [{name: metrics, containerPort: 4751}]
+          readinessProbe: {httpGet: {path: /readyz, port: metrics}, periodSeconds: 5, failureThreshold: 2}
+          livenessProbe: {httpGet: {path: /healthz, port: metrics}, periodSeconds: 30}
+          resources: {requests: {cpu: "1", memory: 1Gi, ephemeral-storage: 2Gi}, limits: {cpu: "4", memory: 8Gi, ephemeral-storage: 20Gi}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts: [{name: tmp, mountPath: /tmp}, {name: token, mountPath: /var/run/secrets/tokens, readOnly: true}]
+      volumes: [{name: tmp, emptyDir: {sizeLimit: 20Gi}}, {name: token, projected: {sources: [{serviceAccountToken: {audience: biz-module-llm, expirationSeconds: 900, path: token}}]}}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openmontage-render-canary
+  namespace: openmontage-test
+spec:
+  replicas: 1
+  selector: {matchLabels: {openmontage.pool: render, openmontage.channel: canary}}
+  template:
+    metadata: {labels: {openmontage.pool: render, openmontage.channel: canary}}
+    spec:
+      serviceAccountName: openmontage-runner
+      terminationGracePeriodSeconds: 900
+      securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: runner
+          image: openmontage-runner:base
+          command: ["python", "-m", "openmontage.runner.worker"]
+          env: [{name: OPENMONTAGE_CHANNEL, value: canary}, {name: OPENMONTAGE_POOL, value: openmontage-render}]
+          ports: [{name: metrics, containerPort: 4751}]
+          readinessProbe: {httpGet: {path: /readyz, port: metrics}, periodSeconds: 5}
+          resources: {requests: {cpu: "1", memory: 1Gi}, limits: {cpu: "4", memory: 8Gi}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts: [{name: token, mountPath: /var/run/secrets/tokens, readOnly: true}]
+      volumes: [{name: token, projected: {sources: [{serviceAccountToken: {audience: biz-module-llm, expirationSeconds: 900, path: token}}]}}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openmontage-gpu-stable
+  namespace: openmontage-test
+spec:
+  replicas: 0
+  selector: {matchLabels: {openmontage.pool: gpu, openmontage.channel: stable}}
+  template:
+    metadata: {labels: {openmontage.pool: gpu, openmontage.channel: stable}}
+    spec:
+      serviceAccountName: openmontage-runner
+      securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: runner
+          image: openmontage-runner:base
+          command: ["python", "-m", "openmontage.runner.worker"]
+          env: [{name: OPENMONTAGE_CHANNEL, value: stable}, {name: OPENMONTAGE_POOL, value: openmontage-gpu}]
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts: [{name: token, mountPath: /var/run/secrets/tokens, readOnly: true}]
+          resources: {requests: {cpu: "1", memory: 2Gi}, limits: {cpu: "4", memory: 8Gi}}
+      volumes: [{name: token, projected: {sources: [{serviceAccountToken: {audience: biz-module-llm, expirationSeconds: 900, path: token}}]}}]

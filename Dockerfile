@@ -73,7 +73,7 @@ COPY --from=dependencies --chown=1000:1000 /opt/openmontage/venv /opt/openmontag
 COPY --from=dependencies --chown=1000:1000 /workspace/remotion-composer/node_modules ./remotion-composer/node_modules
 
 RUN mkdir -p "${OPENMONTAGE_PROJECTS_DIR}" \
-    && python -c "import fastapi, openai, PIL, pydantic, uvicorn" \
+    && python -c "import fastapi, openai, PIL, pydantic, redis, uvicorn" \
     && node --version \
     && ffmpeg -version >/dev/null \
     && test -f remotion-composer/node_modules/.remotion/chrome-headless-shell/VERSION

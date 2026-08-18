@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: openmontage-metrics
+  namespace: openmontage-test
+spec:
+  type: ClusterIP
+  selector: {app.kubernetes.io/part-of: openmontage}
+  ports: [{name: metrics, port: 4751, targetPort: metrics}]
