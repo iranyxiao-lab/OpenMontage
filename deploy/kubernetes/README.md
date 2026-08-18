@@ -16,9 +16,9 @@ Before applying an overlay, render it in CI and assert that no `Service` has `ty
 no `PersistentVolumeClaim` uses `ReadWriteMany`, and every namespaced object targets the selected
 OpenMontage namespace.
 
-Before applying an overlay, provision `openmontage-oss` in that overlay's namespace with these
-keys: `OPENMONTAGE_OSS_REGION`, `OPENMONTAGE_OSS_ENDPOINT`,
-`ALIBABA_CLOUD_ROLE_ARN`, and `ALIBABA_CLOUD_OIDC_PROVIDER_ARN`. Do not store AccessKey ID/Secret
-in this Secret. The bucket is fixed to `openmontage-oss` in the base. The runner exchanges its
-projected `sts.aliyuncs.com` service-account token for short-lived RRSA/OIDC credentials and
-enforces the task grant before each OSS GET/PUT/HEAD.
+Before applying an overlay, provision `openmontage-oss` in that overlay's namespace with
+`OSS_ACCESS_KEY_ID`, `OSS_ACCESS_KEY_SECRET`, and optional `OSS_SESSION_TOKEN`. Prefer temporary STS
+credentials and rotate the Secret before the session expires. The base fixes the bucket to
+`openmontage-oss`, region to `us-east-1`, and endpoint to `oss-us-east-1.aliyuncs.com`. The runner
+enforces the task grant before each OSS GET/PUT/HEAD and never places credentials in commands,
+events, logs, receipts, or DLQ payloads.

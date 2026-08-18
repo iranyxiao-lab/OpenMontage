@@ -42,3 +42,13 @@ def test_network_policy_is_default_deny():
     policies = docs(ROOT / "base" / "policies.yaml")
     deny = next(doc for doc in policies if doc["metadata"]["name"] == "openmontage-default-deny")
     assert set(deny["spec"]["policyTypes"]) == {"Ingress", "Egress"}
+
+
+def test_oss_uses_virginia_environment_credentials_without_oidc_role_config():
+    kustomization = (ROOT / "base" / "kustomization.yaml").read_text(encoding="utf-8")
+    assert "OPENMONTAGE_OSS_BUCKET, value: openmontage-oss" in kustomization
+    assert "OPENMONTAGE_OSS_REGION, value: us-east-1" in kustomization
+    assert "OPENMONTAGE_OSS_ENDPOINT, value: oss-us-east-1.aliyuncs.com" in kustomization
+    assert "ALIBABA_CLOUD_ROLE_ARN" not in kustomization
+    assert "ALIBABA_CLOUD_OIDC_PROVIDER_ARN" not in kustomization
+    assert "ALIBABA_CLOUD_OIDC_TOKEN_FILE" not in kustomization

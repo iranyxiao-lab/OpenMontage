@@ -1,5 +1,6 @@
 import json
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -68,7 +69,8 @@ def test_stage_executor_verifies_checkpoint_receipt_and_task_grant(tmp_path):
 
 def test_grants_are_isolated_by_method():
     command = Command.model_validate(fixture("valid-command.json"))
-    grant = Grant.model_validate(fixture("valid-grant.json"))
+    grant = Grant.model_validate(fixture("valid-grant.json")).model_copy(
+        update={"expiresAt": datetime.now(timezone.utc) + timedelta(minutes=5)})
     store = GrantStore()
     store.add(grant)
     store.authorize(command, "GET", command.runSpecRef.objectKey, command.runSpecRef.sizeBytes)

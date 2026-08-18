@@ -133,32 +133,7 @@ class AlibabaOssObjectStoreClient(ObjectStoreClient):
 
 
 def _oss_credentials_provider(oss: Any) -> Any:
-    """Build an OIDC/RAM provider, falling back to SDK env credentials."""
-    role_arn = os.getenv("ALIBABA_CLOUD_ROLE_ARN")
-    provider_arn = os.getenv("ALIBABA_CLOUD_OIDC_PROVIDER_ARN")
-    token_file = os.getenv("ALIBABA_CLOUD_OIDC_TOKEN_FILE")
-    if role_arn and provider_arn and token_file:
-        from alibabacloud_credentials.client import Client as CredentialsClient
-        from alibabacloud_credentials.models import Config as CredentialsConfig
-
-        credentials_client = CredentialsClient(CredentialsConfig(
-            type="oidc_role_arn",
-            role_arn=role_arn,
-            oidc_provider_arn=provider_arn,
-            oidc_token_file_path=token_file,
-            role_session_name=os.getenv("ALIBABA_CLOUD_ROLE_SESSION_NAME", "openmontage-runner"),
-            role_session_expiration=900,
-        ))
-
-        def refresh() -> Any:
-            credential = credentials_client.get_credential()
-            return oss.credentials.Credentials(
-                access_key_id=credential.access_key_id,
-                access_key_secret=credential.access_key_secret,
-                security_token=credential.security_token,
-            )
-
-        return oss.credentials.CredentialsProviderFunc(func=refresh)
+    """Load OSS_ACCESS_KEY_* and optional OSS_SESSION_TOKEN from the environment."""
     return oss.credentials.EnvironmentVariableCredentialsProvider()
 
 
