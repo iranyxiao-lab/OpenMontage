@@ -268,7 +268,7 @@ class RunnerConfig:
     namespace: str = os.getenv("OPENMONTAGE_NAMESPACE", "openmontage-test")
     pod_uid: str = os.getenv("POD_UID", "local")
     consumer_group: str = os.getenv("OPENMONTAGE_CONSUMER_GROUP", "")
-    consumer_name: str = os.getenv("POD_NAME") or os.getenv("POD_UID", "runner")
+    consumer_name: str = ""
     workspace_root: str = os.getenv("OPENMONTAGE_WORKSPACE_ROOT", tempfile.gettempdir() + "/openmontage-attempts")
     drain_timeout_seconds: int = int(os.getenv("OPENMONTAGE_DRAIN_TIMEOUT_SECONDS", "30"))
     require_grants: bool = os.getenv("OPENMONTAGE_REQUIRE_GRANTS", "false").lower() == "true"
@@ -277,6 +277,10 @@ class RunnerConfig:
     oss_region: str = os.getenv("OPENMONTAGE_OSS_REGION", "")
     oss_endpoint: str = os.getenv("OPENMONTAGE_OSS_ENDPOINT", "") or None
     manifest_root: str = os.getenv("OPENMONTAGE_MANIFEST_ROOT", "")
+
+    def __post_init__(self) -> None:
+        if not self.consumer_name:
+            self.consumer_name = os.getenv("POD_NAME") or self.pod_uid or "runner"
 
     @property
     def command_stream(self) -> str:
