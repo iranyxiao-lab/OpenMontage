@@ -1,0 +1,20 @@
+{
+  "schemaVersion": "openmontage.event.v1",
+  "eventId": "event-montage-approval-0001",
+  "jobId": "job-montage-0001",
+  "taskId": "task-montage-0001",
+  "runId": "run-montage-0001",
+  "attempt": 1,
+  "runRevision": 1,
+  "type": "ApprovalRequired",
+  "occurredAt": "2026-08-18T08:00:00Z",
+  "workerId": "openmontage-planner/openmontage-test/poduid-0001",
+  "workerPool": "openmontage-planner",
+  "channel": "stable",
+  "stage": "script",
+  "checkpointRef": {
+    "objectKey": "montage/task-montage-0001/run-1/checkpoints/script.json",
+    "sha256": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "sizeBytes": 8192
+  }
+}

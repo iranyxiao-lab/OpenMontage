@@ -1,0 +1,11 @@
+{
+  "schemaVersion": "openmontage.cancel.v1",
+  "cancelId": "cancel-montage-0001",
+  "jobId": "job-montage-0001",
+  "taskId": "task-montage-0001",
+  "runId": "run-montage-0001",
+  "attempt": 1,
+  "runRevision": 1,
+  "requestedAt": "2026-08-18T08:02:00Z",
+  "reasonCode": "USER_REQUESTED"
+}

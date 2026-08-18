@@ -25,6 +25,7 @@ dist
 build
 
 tests
+contracts
 *.log
 *.tmp
 .DS_Store

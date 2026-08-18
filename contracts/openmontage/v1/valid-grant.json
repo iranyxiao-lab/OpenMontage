@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "openmontage.grant.v1",
+  "grantId": "grant-montage-0001",
+  "jobId": "job-montage-0001",
+  "attempt": 1,
+  "runRevision": 1,
+  "stage": "script",
+  "method": "GET",
+  "expiresAt": "2026-08-18T08:05:00Z",
+  "targets": [
+    {
+      "name": "runSpec",
+      "objectKey": "montage/task-montage-0001/run-1/spec.json",
+      "maxBytes": 1048576,
+      "contentType": "application/json"
+    }
+  ]
+}

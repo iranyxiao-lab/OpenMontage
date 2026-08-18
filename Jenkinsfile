@@ -94,6 +94,7 @@ pipeline {
         sh '''
           set -eu
           docker build --pull --target test --build-context test-suite=tests \
+            --build-context contracts=contracts \
             -t "${CI_IMAGE}" .
         '''
       }

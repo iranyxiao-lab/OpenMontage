@@ -10,7 +10,12 @@ from openmontage.runner.contracts import Cancel, Command, Event, Grant
 from openmontage.runner.worker import AlibabaOssObjectStoreClient, GrantStore, PinnedManifestHeadlessAgent, Runner, RunnerConfig, StageExecutor, create_app
 
 
-ROOT = Path(__file__).resolve().parents[3] / "contracts" / "openmontage" / "v1"
+_FIXTURE_ROOTS = (
+    Path("/contracts/openmontage/v1"),
+    Path(__file__).resolve().parents[2] / "contracts" / "openmontage" / "v1",
+    Path(__file__).resolve().parents[3] / "contracts" / "openmontage" / "v1",
+)
+ROOT = next((root for root in _FIXTURE_ROOTS if root.is_dir()), _FIXTURE_ROOTS[0])
 
 
 def fixture(name):

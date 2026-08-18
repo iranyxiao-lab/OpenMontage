@@ -1,0 +1,29 @@
+{
+  "schemaVersion": "openmontage.command.v1",
+  "jobId": "job-montage-0001",
+  "taskId": "task-montage-0001",
+  "bizTaskId": "biz-montage-0001",
+  "runId": "run-montage-0001",
+  "attempt": 1,
+  "runRevision": 1,
+  "stage": "script",
+  "pipelineType": "animated-explainer",
+  "manifestVersion": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "runSpecRef": {
+    "objectKey": "montage/task-montage-0001/run-1/spec.json",
+    "sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "sizeBytes": 4096
+  },
+  "inputPlanId": "input-plan-montage-0001",
+  "outputPlanId": "output-plan-montage-0001",
+  "routing": {
+    "channel": "stable",
+    "workerPool": "openmontage-planner",
+    "executionMode": "WORKER"
+  },
+  "limits": {
+    "wallTimeoutSeconds": 1800,
+    "maxOutputBytes": 1073741824
+  },
+  "untrustedShell": "must-be-rejected"
+}

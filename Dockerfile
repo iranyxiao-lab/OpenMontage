@@ -45,6 +45,7 @@ RUN --mount=type=cache,target=/home/node/.cache/pip,uid=1000,gid=1000 \
 
 COPY --chown=1000:1000 . .
 COPY --from=test-suite --chown=1000:1000 / ./tests
+COPY --from=contracts --chown=1000:1000 /openmontage/v1 /contracts/openmontage/v1
 
 CMD ["python", "-m", "pytest", "tests", "-q"]
 

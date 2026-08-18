@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "openmontage.event.v1",
+  "eventId": "event-montage-succeeded-0001",
+  "jobId": "job-montage-0001",
+  "taskId": "task-montage-0001",
+  "runId": "run-montage-0001",
+  "attempt": 1,
+  "runRevision": 1,
+  "type": "TaskSucceeded",
+  "occurredAt": "2026-08-18T08:10:00Z",
+  "workerId": "openmontage-render/openmontage-test/poduid-0002",
+  "workerPool": "openmontage-render",
+  "channel": "stable",
+  "stage": "publish",
+  "artifacts": [
+    {
+      "name": "finalVideo",
+      "objectKey": "montage/task-montage-0001/run-1/output/final.mp4",
+      "contentType": "video/mp4",
+      "sizeBytes": 1048576,
+      "eTag": "etag-montage-0001"
+    }
+  ]
+}
