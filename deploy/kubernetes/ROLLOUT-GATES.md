@@ -6,8 +6,9 @@ below requires an auditable command result and an operator approval.
 
 ## 1. SHADOW
 
-- Keep `OPENMONTAGE_ENABLED`, publication, recovery, and outbox publication off
-  in `biz-module-llm` until contracts and migrations are deployed.
+- The `biz-module-llm` control-plane switches are enabled by code defaults after
+  contracts and migrations are deployed; no deployment-level OpenMontage switch
+  variables are used.
 - Route only explicit `ExecutionMode=SHADOW` validation traffic to the canary
   stream. Shadow must not publish business-visible terminal results.
 - Verify stable and canary command streams/groups, Redis pending counts, worker
@@ -59,4 +60,3 @@ Before exposing a modified OpenMontage service over a network, publish the
 corresponding source, license notices, build instructions, and exact image
 source revision required by AGPLv3. The gate owner records the source bundle
 location and approval alongside the image digest.
-
