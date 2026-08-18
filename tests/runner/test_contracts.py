@@ -120,6 +120,13 @@ def test_grants_are_isolated_by_method():
         store.authorize(command, "HEAD", command.runSpecRef.objectKey, command.runSpecRef.sizeBytes)
 
 
+def test_broadcast_group_is_unique_per_worker_pod():
+    first = RunnerConfig(channel="stable", pool="openmontage-planner", pod_uid="pod-a")
+    second = RunnerConfig(channel="stable", pool="openmontage-planner", pod_uid="pod-b")
+    assert first.group == second.group
+    assert first.broadcast_group != second.broadcast_group
+
+
 class _FakeOssResult:
     def __init__(self, body=b"", metadata=None):
         self.body = __import__("io").BytesIO(body)

@@ -268,7 +268,7 @@ class RunnerConfig:
     namespace: str = os.getenv("OPENMONTAGE_NAMESPACE", "openmontage-test")
     pod_uid: str = os.getenv("POD_UID", "local")
     consumer_group: str = os.getenv("OPENMONTAGE_CONSUMER_GROUP", "")
-    consumer_name: str = os.getenv("POD_NAME", "runner")
+    consumer_name: str = os.getenv("POD_NAME") or os.getenv("POD_UID", "runner")
     workspace_root: str = os.getenv("OPENMONTAGE_WORKSPACE_ROOT", tempfile.gettempdir() + "/openmontage-attempts")
     drain_timeout_seconds: int = int(os.getenv("OPENMONTAGE_DRAIN_TIMEOUT_SECONDS", "30"))
     require_grants: bool = os.getenv("OPENMONTAGE_REQUIRE_GRANTS", "false").lower() == "true"
@@ -290,6 +290,10 @@ class RunnerConfig:
     def group(self) -> str:
         return self.consumer_group or f"openmontage-v1-{self.channel}-{self.pool}"
 
+    @property
+    def broadcast_group(self) -> str:
+        return f"{self.group}-{self.consumer_name[:48]}"
+
 
 class RedisTransport:
     def __init__(self, config: RunnerConfig):
@@ -298,8 +302,8 @@ class RedisTransport:
         self.config = config
         self.client = redis.Redis.from_url(config.redis_url, decode_responses=True)
         for stream, group in ((config.command_stream, config.group),
-                              (config.cancels_stream, config.group + "-cancel"),
-                              (config.grants_stream, config.group + "-grant")):
+                              (config.cancels_stream, config.broadcast_group + "-cancel"),
+                              (config.grants_stream, config.broadcast_group + "-grant")):
             try:
                 self.client.xgroup_create(stream, group, id="0-0", mkstream=True)
             except redis.ResponseError as exc:
@@ -322,24 +326,24 @@ class RedisTransport:
         self.client.xack(self.config.command_stream, self.config.group, message_id)
 
     def read_cancels(self, timeout_ms: int = 1) -> list[tuple[str, dict[str, str]]]:
-        result = self.client.xreadgroup(self.config.group + "-cancel", self.config.consumer_name,
+        result = self.client.xreadgroup(self.config.broadcast_group + "-cancel", self.config.consumer_name,
                                         {self.config.cancels_stream: ">"}, count=20, block=timeout_ms)
         if not result:
             return []
         return [(message_id, fields) for _, entries in result for message_id, fields in entries]
 
     def ack_cancel(self, message_id: str) -> None:
-        self.client.xack(self.config.cancels_stream, self.config.group + "-cancel", message_id)
+        self.client.xack(self.config.cancels_stream, self.config.broadcast_group + "-cancel", message_id)
 
     def read_grants(self, timeout_ms: int = 1) -> list[tuple[str, dict[str, str]]]:
-        result = self.client.xreadgroup(self.config.group + "-grant", self.config.consumer_name,
+        result = self.client.xreadgroup(self.config.broadcast_group + "-grant", self.config.consumer_name,
                                         {self.config.grants_stream: ">"}, count=20, block=timeout_ms)
         if not result:
             return []
         return [(message_id, fields) for _, entries in result for message_id, fields in entries]
 
     def ack_grant(self, message_id: str) -> None:
-        self.client.xack(self.config.grants_stream, self.config.group + "-grant", message_id)
+        self.client.xack(self.config.grants_stream, self.config.broadcast_group + "-grant", message_id)
 
     def publish(self, event: Event) -> str:
         return self.client.xadd(self.config.events_stream, {"payload": _json(event.model_dump(mode="json"))})
