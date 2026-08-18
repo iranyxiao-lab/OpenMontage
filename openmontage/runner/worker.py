@@ -155,6 +155,17 @@ class GrantStore:
         if target is None or size > target.maxBytes:
             raise PermissionError("task_grant_limit_exceeded")
 
+    def ready(self, command: Command) -> bool:
+        checkpoint_key = f"montage/{command.taskId}/run-{command.runRevision}/checkpoints/{command.stage}.json"
+        checks = (("GET", command.runSpecRef.objectKey, command.runSpecRef.sizeBytes),
+                  ("PUT", checkpoint_key, 1), ("HEAD", checkpoint_key, 1))
+        for method, object_key, size in checks:
+            try:
+                self.authorize(command, method, object_key, size)
+            except PermissionError:
+                return False
+        return True
+
 
 class HeadlessAgent:
     def run(self, command: Command, workspace: Path) -> bytes:
@@ -379,10 +390,24 @@ class Runner:
             return self._success(command, deterministic=True)
         if self.draining:
             raise RuntimeError("runner_draining")
+        self._wait_for_grants(command)
         execution = self.executor.execute(command)
         self._completed.add(identity)
         self.executor.cleanup(command)
         return self._success(command, checkpoint=execution.checkpoint, artifacts=execution.artifacts)
+
+    def _wait_for_grants(self, command: Command) -> None:
+        if not self.config.require_grants or self.transport is None:
+            return
+        deadline = time.monotonic() + 15
+        while not self.executor.grants.ready(command):
+            if time.monotonic() >= deadline:
+                raise PermissionError("task_grant_denied")
+            for message_id, fields in self.transport.read_grants(timeout_ms=250):
+                try:
+                    self.executor.grants.add(Grant.model_validate_json(fields["payload"]))
+                finally:
+                    self.transport.ack_grant(message_id)
 
     def _success(self, command: Command, checkpoint: Ref | None = None, artifacts: list[dict[str, Any]] | None = None, deterministic: bool = False) -> Event:
         now = datetime.now(timezone.utc)
