@@ -42,6 +42,38 @@ class Trace(StrictModel):
     spanId: str = Field(pattern=r"^[a-f0-9]{16}$")
 
 
+class Source(StrictModel):
+    kind: str = Field(pattern=r"^[a-z][a-z_]{1,31}$")
+    locator: str | None = Field(default=None, max_length=2048)
+
+    @field_validator("locator")
+    @classmethod
+    def safe_locator(cls, value: str | None) -> str | None:
+        if value is not None and any(marker in value.lower() for marker in (
+            "authorization", "bearer ", "cookie", "secret", "access_key", "accesskey", "signature", "x-amz-"
+        )):
+            raise ValueError("sensitive material is not allowed")
+        return value
+
+
+class ProductionSettings(StrictModel):
+    durationSeconds: int = Field(gt=0, le=86400)
+    aspectRatio: str = Field(pattern=r"^(16:9|9:16|1:1)$")
+    resolution: str = Field(pattern=r"^(720p|1080p|4k)$")
+    language: str = Field(pattern=r"^[A-Za-z-]{2,16}$")
+    voice: str = Field(pattern=r"^[a-z0-9-]{1,64}$")
+    subtitleStyle: str = Field(pattern=r"^(none|clean|karaoke|highlight)$")
+    music: str = Field(pattern=r"^(none|auto|provided)$")
+    visualStyle: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$")
+    budgetTier: str = Field(pattern=r"^(economy|balanced|premium)$")
+
+
+class UserIntent(StrictModel):
+    brief: str = Field(min_length=1, max_length=4000)
+    sources: list[Source] = Field(min_length=1, max_length=16)
+    production: ProductionSettings
+
+
 class Command(StrictModel):
     schemaVersion: str = Field(pattern=r"^openmontage\.command\.v1$")
     jobId: str = Field(pattern=r"^[A-Za-z0-9._-]{1,128}$")
@@ -59,6 +91,7 @@ class Command(StrictModel):
     routing: Routing
     limits: Limits
     trace: Trace
+    userIntent: UserIntent | None = None
 
     @model_validator(mode="after")
     def no_sensitive_material(self) -> "Command":

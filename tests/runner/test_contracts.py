@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from openmontage.runner.contracts import Cancel, Command, Event, Grant
+from openmontage.runner.contracts import Cancel, Command, Event, Grant, UserIntent
 from openmontage.runner.worker import AlibabaOssObjectStoreClient, GrantStore, PinnedManifestHeadlessAgent, Runner, RunnerConfig, StageExecutor, create_app
 
 
@@ -37,6 +37,34 @@ def test_unknown_fields_and_credentials_are_rejected():
         Command.model_validate(unknown)
     with pytest.raises(ValidationError):
         Command.model_validate(credential)
+
+
+def test_user_intent_accepts_public_reference_and_rejects_sensitive_locator():
+    command = Command.model_validate(fixture("valid-command.json"))
+    intent = UserIntent.model_validate({
+        "brief": "Make a concise product launch video",
+        "sources": [
+            {"kind": "prompt"},
+            {"kind": "reference_video", "locator": "https://www.youtube.com/watch?v=example"},
+        ],
+        "production": {
+            "durationSeconds": 30,
+            "aspectRatio": "16:9",
+            "resolution": "1080p",
+            "language": "en-US",
+            "voice": "neutral",
+            "subtitleStyle": "clean",
+            "music": "auto",
+            "visualStyle": "cinematic",
+            "budgetTier": "balanced",
+        },
+    })
+    command = command.model_copy(update={"userIntent": intent})
+    assert command.userIntent.sources[1].locator.startswith("https://www.youtube.com")
+    with pytest.raises(ValidationError):
+        UserIntent.model_validate({**intent.model_dump(), "sources": [
+            {"kind": "reference_video", "locator": "https://example.test/?x-amz-signature=secret"},
+        ]})
 
 
 def test_runner_identity_is_idempotent_and_pool_is_frozen():
