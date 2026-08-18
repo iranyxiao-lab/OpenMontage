@@ -46,6 +46,7 @@ def test_network_policy_is_default_deny():
 
 def test_oss_uses_virginia_environment_credentials_without_oidc_role_config():
     kustomization = (ROOT / "base" / "kustomization.yaml").read_text(encoding="utf-8")
+    assert "name: deepthink-docker-registry-key" in kustomization
     assert "OPENMONTAGE_OSS_BUCKET, value: openmontage-oss" in kustomization
     assert "OPENMONTAGE_OSS_REGION, value: us-east-1" in kustomization
     assert "OPENMONTAGE_OSS_ENDPOINT, value: oss-us-east-1.aliyuncs.com" in kustomization

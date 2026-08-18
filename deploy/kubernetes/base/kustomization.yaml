@@ -14,6 +14,10 @@ patches:
       kind: Deployment
     patch: |-
       - op: add
+        path: /spec/template/spec/imagePullSecrets
+        value:
+          - name: deepthink-docker-registry-key
+      - op: add
         path: /spec/template/spec/containers/0/envFrom
         value:
           - secretRef:
