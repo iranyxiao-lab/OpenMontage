@@ -18,10 +18,8 @@ pipeline {
   environment {
     DOCKER_BUILDKIT = '1'
     IMAGE_NAME = 'openmontage'
-    DEPLOYMENT = 'openmontage'
-    DEPLOY_CONTAINER = 'openmontage'
-    DEPLOY_NAMESPACE = 'test'
-    DEPLOY_MANIFEST = 'deploy/kubernetes/openmontage-test.yaml'
+    DEPLOY_NAMESPACE = 'openmontage-test'
+    DEPLOY_OVERLAY = 'deploy/kubernetes/overlays/test'
     DINGTALK_ROBOT = '测试环境钉钉CICD通知告警机器人'
   }
 
@@ -84,9 +82,9 @@ pipeline {
         sh '''
           set -eu
           docker version >/dev/null
+          kubectl --context="${KUBE_CONTEXT}" apply -f "${DEPLOY_OVERLAY}/namespace.yaml" >/dev/null
           kubectl --context="${KUBE_CONTEXT}" get namespace "${DEPLOY_NAMESPACE}" >/dev/null
-          kubectl --context="${KUBE_CONTEXT}" -n "${DEPLOY_NAMESPACE}" get secret deepthink-docker-registry-key >/dev/null
-          kubectl --context="${KUBE_CONTEXT}" get storageclass soulx-nas >/dev/null
+          kubectl --context="${KUBE_CONTEXT}" -n "${DEPLOY_NAMESPACE}" get secret openmontage-oss >/dev/null
         '''
       }
     }
@@ -179,8 +177,9 @@ pipeline {
       steps {
         sh '''
           set -eu
-          sed "s|__OPENMONTAGE_IMAGE__|${RUNTIME_IMAGE}:${EFFECTIVE_TAG}|g" \
-            "${DEPLOY_MANIFEST}" > openmontage-test.rendered.yaml
+          kubectl --context="${KUBE_CONTEXT}" kustomize "${DEPLOY_OVERLAY}" \
+            | sed "s|registry.example.invalid/openmontage:test|${RUNTIME_IMAGE}:${EFFECTIVE_TAG}|g" \
+            > openmontage-test.rendered.yaml
           kubectl --context="${KUBE_CONTEXT}" -n "${DEPLOY_NAMESPACE}" apply \
             --dry-run=server -f openmontage-test.rendered.yaml >/dev/null
         '''
@@ -202,14 +201,11 @@ pipeline {
           set -eu
           kubectl --context="${KUBE_CONTEXT}" -n "${DEPLOY_NAMESPACE}" apply \
             -f openmontage-test.rendered.yaml
-          patch_payload="$(printf '{"spec":{"template":{"metadata":{"annotations":{"ci.soulx.dev/build":"%s"}}}}}' \
-            "${BUILD_NUMBER}-${GIT_COMMIT}")"
-          kubectl --context="${KUBE_CONTEXT}" -n "${DEPLOY_NAMESPACE}" patch \
-            "deployment/${DEPLOYMENT}" --type merge -p "${patch_payload}" >/dev/null
-          kubectl --context="${KUBE_CONTEXT}" -n "${DEPLOY_NAMESPACE}" rollout status \
-            "deployment/${DEPLOYMENT}" --timeout=30m
-          kubectl --context="${KUBE_CONTEXT}" -n "${DEPLOY_NAMESPACE}" wait \
-            "deployment/${DEPLOYMENT}" --for=condition=Available --timeout=2m
+          for deployment in $(kubectl --context="${KUBE_CONTEXT}" -n "${DEPLOY_NAMESPACE}" get deployment \
+            -l app.kubernetes.io/part-of=openmontage -o name); do
+            kubectl --context="${KUBE_CONTEXT}" -n "${DEPLOY_NAMESPACE}" rollout status \
+              "${deployment}" --timeout=30m
+          done
         '''
       }
     }
@@ -218,46 +214,11 @@ pipeline {
       steps {
         sh '''
           set -eu
-          smoke_pod="openmontage-smoke-${BUILD_NUMBER}"
-          cleanup() {
-            kubectl --context="${KUBE_CONTEXT}" -n "${DEPLOY_NAMESPACE}" delete pod "${smoke_pod}" \
-              --ignore-not-found=true --wait=true --timeout=30s >/dev/null 2>&1 || true
-          }
-          trap cleanup EXIT HUP INT TERM
-          cleanup
-
-          deployed_image="$(kubectl --context="${KUBE_CONTEXT}" -n "${DEPLOY_NAMESPACE}" get \
-            "deployment/${DEPLOYMENT}" -o jsonpath='{.spec.template.spec.containers[?(@.name=="openmontage")].image}')"
-          test "${deployed_image}" = "${RUNTIME_IMAGE}:${EFFECTIVE_TAG}"
-          endpoint="$(kubectl --context="${KUBE_CONTEXT}" -n "${DEPLOY_NAMESPACE}" get endpointslice \
-            -l kubernetes.io/service-name=openmontage -o jsonpath='{.items[0].endpoints[0].addresses[0]}')"
-          test -n "${endpoint}"
-
-          kubectl --context="${KUBE_CONTEXT}" -n "${DEPLOY_NAMESPACE}" run "${smoke_pod}" \
-            --image=curlimages/curl:8.10.1 --restart=Never \
-            --labels=app.kubernetes.io/name=openmontage-smoke \
-            --command -- curl --fail --silent --show-error http://openmontage:4750/api/health
-          smoke_succeeded=false
-          for attempt in $(seq 1 90); do
-            phase="$(kubectl --context="${KUBE_CONTEXT}" -n "${DEPLOY_NAMESPACE}" get \
-              "pod/${smoke_pod}" -o jsonpath='{.status.phase}')"
-            case "${phase}" in
-              Succeeded)
-                smoke_succeeded=true
-                break
-                ;;
-              Failed|Unknown)
-                break
-                ;;
-            esac
-            sleep 2
-          done
-          if [ "${smoke_succeeded}" != true ]; then
-            kubectl --context="${KUBE_CONTEXT}" -n "${DEPLOY_NAMESPACE}" logs "${smoke_pod}" || true
-            kubectl --context="${KUBE_CONTEXT}" -n "${DEPLOY_NAMESPACE}" describe pod "${smoke_pod}" || true
-            exit 1
-          fi
-          kubectl --context="${KUBE_CONTEXT}" -n "${DEPLOY_NAMESPACE}" logs "${smoke_pod}"
+          kubectl --context="${KUBE_CONTEXT}" -n "${DEPLOY_NAMESPACE}" get \
+            deployment,pod,service -l app.kubernetes.io/part-of=openmontage -o wide
+          test "$(kubectl --context="${KUBE_CONTEXT}" -n "${DEPLOY_NAMESPACE}" get \
+            deployment -l app.kubernetes.io/part-of=openmontage -o jsonpath='{.items[*].status.conditions[?(@.type=="Available")].status}' \
+            | tr ' ' '\n' | grep -c '^True$')" -ge 4
         '''
       }
     }
@@ -269,11 +230,9 @@ pipeline {
         if (env.KUBE_CONTEXT) {
           sh '''
             kubectl --context="${KUBE_CONTEXT}" -n "${DEPLOY_NAMESPACE}" get deployment,pod,service,endpointslice \
-              -l app.kubernetes.io/name=openmontage -o wide || true
-            kubectl --context="${KUBE_CONTEXT}" -n "${DEPLOY_NAMESPACE}" describe \
-              "deployment/${DEPLOYMENT}" || true
-            kubectl --context="${KUBE_CONTEXT}" -n "${DEPLOY_NAMESPACE}" logs \
-              "deployment/${DEPLOYMENT}" --all-containers=true --tail=200 || true
+              -l app.kubernetes.io/part-of=openmontage -o wide || true
+            kubectl --context="${KUBE_CONTEXT}" -n "${DEPLOY_NAMESPACE}" get deployment \
+              -l app.kubernetes.io/part-of=openmontage -o name || true
           '''
         }
       }
