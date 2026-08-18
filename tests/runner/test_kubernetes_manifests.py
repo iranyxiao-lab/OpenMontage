@@ -1,5 +1,8 @@
+import shutil
+import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 
@@ -18,8 +21,12 @@ def test_base_has_isolated_pools_and_no_public_service():
     assert next(doc for doc in deployments if doc["metadata"]["name"] == "openmontage-gpu-stable")["spec"]["replicas"] == 0
     for deployment in deployments:
         pod = deployment["spec"]["template"]["spec"]
+        container = pod["containers"][0]
         assert pod["securityContext"]["runAsNonRoot"] is True
-        assert pod["containers"][0]["securityContext"]["readOnlyRootFilesystem"] is True
+        assert container["securityContext"]["readOnlyRootFilesystem"] is True
+        assert {mount["mountPath"] for mount in container["volumeMounts"]} >= {"/tmp"}
+        tmp_volume = next(volume for volume in pod["volumes"] if volume["name"] == "tmp")
+        assert tmp_volume["emptyDir"]["sizeLimit"]
     service = next(doc for doc in all_docs if doc["kind"] == "Service")
     assert service["spec"]["type"] == "ClusterIP"
 
@@ -60,3 +67,40 @@ def test_legacy_test_manifest_targets_openmontage_namespace():
         if doc.get("kind") == "Namespace":
             continue
         assert doc["metadata"].get("namespace") == "openmontage-test"
+
+
+def test_test_overlay_reduces_render_cpu_request_only():
+    overlay_path = ROOT / "overlays" / "test" / "kustomization.yaml"
+    overlay = yaml.safe_load(overlay_path.read_text(encoding="utf-8"))
+    render_patch = next(
+        patch for patch in overlay["patches"]
+        if patch["target"].get("name") == "openmontage-render-.*"
+    )
+    operations = yaml.safe_load(render_patch["patch"])
+    assert operations == [
+        {
+            "op": "replace",
+            "path": "/spec/template/spec/containers/0/resources/requests/cpu",
+            "value": "250m",
+        }
+    ]
+
+
+@pytest.mark.parametrize("environment", ["test", "prod"])
+def test_environment_overlay_renders(environment):
+    kubectl = shutil.which("kubectl")
+    if kubectl is None:
+        pytest.skip("kubectl is required to render Kustomize overlays")
+    result = subprocess.run(
+        [kubectl, "kustomize", str(ROOT / "overlays" / environment)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    rendered = list(yaml.safe_load_all(result.stdout))
+    assert rendered
+    assert all(
+        doc["metadata"].get("namespace") == f"openmontage-{environment}"
+        for doc in rendered
+        if doc and doc.get("kind") != "Namespace"
+    )

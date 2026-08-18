@@ -8,3 +8,11 @@ images:
   - name: openmontage-runner
     newName: registry.example.invalid/openmontage
     newTag: test
+patches:
+  - target:
+      kind: Deployment
+      name: openmontage-render-.*
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: 250m

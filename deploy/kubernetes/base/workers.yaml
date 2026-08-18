@@ -56,8 +56,8 @@ spec:
           readinessProbe: {httpGet: {path: /readyz, port: metrics}, periodSeconds: 5}
           resources: {requests: {cpu: 250m, memory: 512Mi}, limits: {cpu: "2", memory: 2Gi}}
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
-          volumeMounts: [{name: token, mountPath: /var/run/secrets/tokens, readOnly: true}]
-      volumes: [{name: token, projected: {sources: [{serviceAccountToken: {audience: biz-module-llm, expirationSeconds: 900, path: token}}]}}]
+          volumeMounts: [{name: tmp, mountPath: /tmp}, {name: token, mountPath: /var/run/secrets/tokens, readOnly: true}]
+      volumes: [{name: tmp, emptyDir: {sizeLimit: 4Gi}}, {name: token, projected: {sources: [{serviceAccountToken: {audience: biz-module-llm, expirationSeconds: 900, path: token}}]}}]
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -111,8 +111,8 @@ spec:
           readinessProbe: {httpGet: {path: /readyz, port: metrics}, periodSeconds: 5}
           resources: {requests: {cpu: "1", memory: 1Gi}, limits: {cpu: "4", memory: 8Gi}}
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
-          volumeMounts: [{name: token, mountPath: /var/run/secrets/tokens, readOnly: true}]
-      volumes: [{name: token, projected: {sources: [{serviceAccountToken: {audience: biz-module-llm, expirationSeconds: 900, path: token}}]}}]
+          volumeMounts: [{name: tmp, mountPath: /tmp}, {name: token, mountPath: /var/run/secrets/tokens, readOnly: true}]
+      volumes: [{name: tmp, emptyDir: {sizeLimit: 20Gi}}, {name: token, projected: {sources: [{serviceAccountToken: {audience: biz-module-llm, expirationSeconds: 900, path: token}}]}}]
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -133,6 +133,6 @@ spec:
           command: ["python", "-m", "openmontage.runner.worker"]
           env: [{name: OPENMONTAGE_CHANNEL, value: stable}, {name: OPENMONTAGE_POOL, value: openmontage-gpu}]
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
-          volumeMounts: [{name: token, mountPath: /var/run/secrets/tokens, readOnly: true}]
+          volumeMounts: [{name: tmp, mountPath: /tmp}, {name: token, mountPath: /var/run/secrets/tokens, readOnly: true}]
           resources: {requests: {cpu: "1", memory: 2Gi}, limits: {cpu: "4", memory: 8Gi}}
-      volumes: [{name: token, projected: {sources: [{serviceAccountToken: {audience: biz-module-llm, expirationSeconds: 900, path: token}}]}}]
+      volumes: [{name: tmp, emptyDir: {sizeLimit: 20Gi}}, {name: token, projected: {sources: [{serviceAccountToken: {audience: biz-module-llm, expirationSeconds: 900, path: token}}]}}]

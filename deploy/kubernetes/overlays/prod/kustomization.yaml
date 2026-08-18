@@ -5,8 +5,6 @@ resources:
   - namespace.yaml
   - ../../base
   - hpa.yaml
-patches:
-  - path: replicas.yaml
 images:
   - name: openmontage-runner
     newName: registry.example.invalid/openmontage
