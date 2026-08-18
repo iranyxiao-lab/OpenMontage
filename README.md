@@ -258,6 +258,11 @@ OPENAI_API_KEY=your-key        # OpenAI TTS, GPT Image 2 images
 XAI_API_KEY=your-key           # xAI Grok image edits/generation + Grok video generation
 GOOGLE_API_KEY=your-key        # Google Imagen images, Google TTS (700+ voices)
 
+# Optional internal gateway. When complete, mapped OpenAI-compatible calls use it explicitly.
+OPENMONTAGE_GATEWAY_BASE_URL=http://ai-gateway.deepthink.com
+OPENMONTAGE_GATEWAY_API_KEY=   # inject from Kubernetes Secret; never commit or log
+OPENMONTAGE_GATEWAY_GROUP=sondo
+
 # More video providers:
 ARK_API_KEY=your-key           # Volcengine Ark direct — Seedance 2.0 Standard/Fast/Mini
 HEYGEN_API_KEY=your-key        # HeyGen — VEO, Sora, Runway, Kling via single gateway

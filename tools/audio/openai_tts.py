@@ -19,6 +19,13 @@ from tools.base_tool import (
     ToolStatus,
     ToolTier,
 )
+from tools.gateway_client import (
+    GatewayConfigurationError,
+    gateway_config,
+    openai_client,
+    redact_error,
+    route_for_model,
+)
 
 
 class OpenAITTS(BaseTool):
@@ -112,8 +119,11 @@ class OpenAITTS(BaseTool):
     user_visible_verification = ["Listen to generated audio for intelligibility and tone"]
 
     def get_status(self) -> ToolStatus:
-        if os.environ.get("OPENAI_API_KEY"):
-            return ToolStatus.AVAILABLE
+        try:
+            if gateway_config() is not None or os.environ.get("OPENAI_API_KEY"):
+                return ToolStatus.AVAILABLE
+        except GatewayConfigurationError:
+            return ToolStatus.UNAVAILABLE
         return ToolStatus.UNAVAILABLE
 
     def estimate_cost(self, inputs: dict[str, Any]) -> float:
@@ -124,22 +134,24 @@ class OpenAITTS(BaseTool):
         return model.startswith("gpt-4o-mini-tts")
 
     def execute(self, inputs: dict[str, Any]) -> ToolResult:
-        if not os.environ.get("OPENAI_API_KEY"):
+        try:
+            configured = gateway_config() is not None
+        except GatewayConfigurationError as exc:
+            return ToolResult(success=False, error=str(exc))
+        if not configured and not os.environ.get("OPENAI_API_KEY"):
             return ToolResult(success=False, error="No OpenAI API key. " + self.install_instructions)
 
         start = time.time()
         try:
             result = self._generate(inputs)
         except Exception as exc:
-            return ToolResult(success=False, error=f"OpenAI TTS failed: {exc}")
+            return ToolResult(success=False, error=f"OpenAI TTS failed: {redact_error(exc)}")
 
         result.duration_seconds = round(time.time() - start, 2)
         result.cost_usd = self.estimate_cost(inputs)
         return result
 
     def _generate(self, inputs: dict[str, Any]) -> ToolResult:
-        from openai import OpenAI
-
         from tools.analysis.audio_probe import probe_duration
 
         text = inputs["text"]
@@ -155,7 +167,7 @@ class OpenAITTS(BaseTool):
                 ),
             )
 
-        client = OpenAI()
+        client = openai_client()
         output_path = Path(inputs.get("output_path", f"openai_tts.{fmt}"))
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -179,6 +191,7 @@ class OpenAITTS(BaseTool):
             success=True,
             data={
                 "provider": self.provider,
+                "route": route_for_model(model, "tts") if gateway_config() else "direct",
                 "model": model,
                 "voice": voice,
                 "format": fmt,

@@ -32,6 +32,13 @@ from tools.base_tool import (
     ToolStatus,
     ToolTier,
 )
+from tools.gateway_client import (
+    GatewayConfigurationError,
+    gateway_config,
+    openai_client,
+    redact_error,
+    route_for_model,
+)
 
 
 class ImageGen(BaseTool):
@@ -107,8 +114,11 @@ class ImageGen(BaseTool):
         return ToolStatus.UNAVAILABLE
 
     def _detect_provider(self) -> Optional[str]:
-        if os.environ.get("OPENAI_API_KEY"):
-            return "openai"
+        try:
+            if gateway_config() is not None or os.environ.get("OPENAI_API_KEY"):
+                return "openai"
+        except GatewayConfigurationError:
+            return None
         if os.environ.get("FAL_KEY") or os.environ.get("FAL_AI_API_KEY"):
             return "flux"
         try:
@@ -146,17 +156,16 @@ class ImageGen(BaseTool):
             else:
                 return ToolResult(success=False, error=f"Unknown provider: {provider}")
         except Exception as e:
-            return ToolResult(success=False, error=f"Generation failed: {e}")
+            return ToolResult(success=False, error=f"Generation failed: {redact_error(e)}")
 
         result.duration_seconds = round(time.time() - start, 2)
         result.cost_usd = self.estimate_cost(inputs)
         return result
 
     def _generate_openai(self, inputs: dict[str, Any]) -> ToolResult:
-        from openai import OpenAI
         import base64
 
-        client = OpenAI()
+        client = openai_client()
         prompt = inputs["prompt"]
         size = f"{inputs.get('width', 1024)}x{inputs.get('height', 1024)}"
         model = inputs.get("model", "gpt-image-2")
@@ -178,6 +187,7 @@ class ImageGen(BaseTool):
             success=True,
             data={
                 "provider": "openai",
+                "route": route_for_model(model, "image") if gateway_config() else "direct",
                 "model": model,
                 "prompt": prompt,
                 "output": str(output_path),

@@ -20,6 +20,13 @@ from tools.base_tool import (
     ToolStatus,
     ToolTier,
 )
+from tools.gateway_client import (
+    GatewayConfigurationError,
+    gateway_config,
+    openai_client,
+    redact_error,
+    route_for_model,
+)
 
 
 class OpenAIImage(BaseTool):
@@ -111,8 +118,11 @@ class OpenAIImage(BaseTool):
         return [base.parent / f"{base.name}_{idx + 1}{suffix}" for idx in range(count)]
 
     def get_status(self) -> ToolStatus:
-        if os.environ.get("OPENAI_API_KEY"):
-            return ToolStatus.AVAILABLE
+        try:
+            if gateway_config() is not None or os.environ.get("OPENAI_API_KEY"):
+                return ToolStatus.AVAILABLE
+        except GatewayConfigurationError:
+            return ToolStatus.UNAVAILABLE
         return ToolStatus.UNAVAILABLE
 
     def estimate_cost(self, inputs: dict[str, Any]) -> float:
@@ -124,22 +134,24 @@ class OpenAIImage(BaseTool):
         return cost_map.get(quality, 0.053) * n
 
     def execute(self, inputs: dict[str, Any]) -> ToolResult:
-        if not os.environ.get("OPENAI_API_KEY"):
+        try:
+            configured = gateway_config() is not None
+        except GatewayConfigurationError as exc:
+            return ToolResult(success=False, error=str(exc))
+        if not configured and not os.environ.get("OPENAI_API_KEY"):
             return ToolResult(
                 success=False,
                 error="OPENAI_API_KEY not set. " + self.install_instructions,
             )
 
-        from openai import OpenAI
-
         start = time.time()
-        client = OpenAI()
         model = inputs.get("model", "gpt-image-2")
         prompt = inputs["prompt"]
         size = inputs.get("size", "1024x1024")
         n = inputs.get("n", 1)
 
         try:
+            client = openai_client()
             quality = inputs.get("quality", "high")
             output_format = inputs.get("output_format", "png")
             response = client.images.generate(
@@ -164,12 +176,13 @@ class OpenAIImage(BaseTool):
                 outputs.append(str(out_path))
 
         except Exception as e:
-            return ToolResult(success=False, error=f"OpenAI image generation failed: {e}")
+            return ToolResult(success=False, error=f"OpenAI image generation failed: {redact_error(e)}")
 
         return ToolResult(
             success=True,
             data={
                 "provider": "openai",
+                "route": route_for_model(model, "image") if gateway_config() else "direct",
                 "model": model,
                 "prompt": prompt,
                 "output": outputs[0],

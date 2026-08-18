@@ -45,3 +45,13 @@ patches:
             secretKeyRef:
               name: openmontage-redis
               key: url
+  - target:
+      kind: Deployment
+      name: openmontage-(planner|render)-(stable|canary)
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/envFrom/-
+        value:
+          secretRef:
+            name: openmontage-providers
+            optional: true

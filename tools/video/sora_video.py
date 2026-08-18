@@ -21,6 +21,13 @@ from tools.base_tool import (
     ToolStatus,
     ToolTier,
 )
+from tools.gateway_client import (
+    GatewayConfigurationError,
+    gateway_config,
+    openai_client,
+    redact_error,
+    route_for_model,
+)
 
 
 _DEFAULT_MODEL = "sora-2"
@@ -123,7 +130,11 @@ class SoraVideo(BaseTool):
     user_visible_verification = ["Watch generated clip for motion coherence, artifacts, and audio quality"]
 
     def get_status(self) -> ToolStatus:
-        if not os.environ.get("OPENAI_API_KEY"):
+        try:
+            configured = gateway_config() is not None
+        except GatewayConfigurationError:
+            return ToolStatus.UNAVAILABLE
+        if not configured and not os.environ.get("OPENAI_API_KEY"):
             return ToolStatus.UNAVAILABLE
         if not self._openai_sdk_supports_videos():
             return ToolStatus.UNAVAILABLE
@@ -139,7 +150,11 @@ class SoraVideo(BaseTool):
         return 120.0 * (seconds / 4)
 
     def execute(self, inputs: dict[str, Any]) -> ToolResult:
-        if not os.environ.get("OPENAI_API_KEY"):
+        try:
+            configured = gateway_config() is not None
+        except GatewayConfigurationError as exc:
+            return ToolResult(success=False, error=str(exc))
+        if not configured and not os.environ.get("OPENAI_API_KEY"):
             return ToolResult(
                 success=False,
                 error="OPENAI_API_KEY not set. " + self.install_instructions,
@@ -149,8 +164,6 @@ class SoraVideo(BaseTool):
                 success=False,
                 error="OpenAI SDK with Videos API support is required. " + self.install_instructions,
             )
-
-        from openai import OpenAI
 
         start = time.time()
         model = self._normalize_model(inputs)
@@ -176,7 +189,7 @@ class SoraVideo(BaseTool):
                 return ToolResult(success=False, error=f"Input reference not found: {reference}")
             payload["input_reference"] = {"image_url": self._file_to_data_uri(reference)}
 
-        client = OpenAI()
+        client = openai_client()
         try:
             video = client.videos.create_and_poll(**payload)
             video_id = self._get_video_id(video)
@@ -190,12 +203,13 @@ class SoraVideo(BaseTool):
             content = client.videos.download_content(video_id, variant="video")
             self._write_download(content, output_path)
         except Exception as exc:
-            return ToolResult(success=False, error=f"OpenAI Sora video generation failed: {exc}")
+            return ToolResult(success=False, error=f"OpenAI Sora video generation failed: {redact_error(exc)}")
 
         return ToolResult(
             success=True,
             data={
                 "provider": "openai",
+                "route": route_for_model(model, "video") if gateway_config() else "direct",
                 "model": model,
                 "video_id": video_id,
                 "prompt": prompt,
@@ -220,7 +234,10 @@ class SoraVideo(BaseTool):
 
         if cls._version_tuple(getattr(openai, "__version__", "")) < _MIN_OPENAI_VERSION:
             return False
-        return hasattr(OpenAI(), "videos")
+        try:
+            return hasattr(openai_client(), "videos")
+        except Exception:
+            return hasattr(OpenAI, "videos")
 
     @staticmethod
     def _version_tuple(version: str) -> tuple[int, int, int]:

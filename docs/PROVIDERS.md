@@ -56,6 +56,11 @@ FAL_KEY=                     # FLUX, Recraft, Kling, Veo, MiniMax video
 MINIMAX_API_KEY=             # MiniMax first-party image + MiniMax H3 video generation
 ATLASCLOUD_API_KEY=          # Atlas Cloud image/video gateway
 
+# INTERNAL AI GATEWAY (when both are present, mapped OpenAI-compatible tools use this endpoint)
+OPENMONTAGE_GATEWAY_BASE_URL= # e.g. http://ai-gateway.deepthink.com
+OPENMONTAGE_GATEWAY_API_KEY=  # provisioned as a Kubernetes Secret; never commit or log
+OPENMONTAGE_GATEWAY_GROUP=sondo
+
 # KLING OFFICIAL DIRECT API
 KLING_API_KEY=               # Official Kling video, image, TTS, avatar, lip sync
 KLING_API_BASE_URL=          # Optional; default https://api-singapore.klingai.com
