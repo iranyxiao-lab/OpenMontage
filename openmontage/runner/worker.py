@@ -121,7 +121,7 @@ class AlibabaOssObjectStoreClient(ObjectStoreClient):
     def get(self, ref: Ref, *, max_bytes: int) -> bytes:
         try:
             result = self._client.get_object(self._oss.GetObjectRequest(bucket=self.bucket, key=ref.objectKey))
-            body = result.body.read(max_bytes + 1) if hasattr(result.body, "read") else bytes(result.body)
+            body = result.body.read() if hasattr(result.body, "read") else bytes(result.body)
         except Exception as exc:
             raise RuntimeError("oss_get_failed") from exc
         if len(body) > max_bytes:

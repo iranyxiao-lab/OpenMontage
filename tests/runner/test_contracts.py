@@ -109,6 +109,33 @@ def test_stage_executor_verifies_checkpoint_receipt_and_task_grant(tmp_path):
         store.authorize(command, "PUT", "other-task/object", 1)
 
 
+def test_oss_get_supports_sdk_v2_stream_body_reader():
+    body = b"{}"
+
+    class _Reader:
+        def read(self):
+            return body
+
+    class _GetResult:
+        body = _Reader()
+
+    class _Client:
+        def get_object(self, request):
+            return _GetResult()
+
+    class _Sdk:
+        class GetObjectRequest:
+            def __init__(self, **kwargs):
+                pass
+
+    client = AlibabaOssObjectStoreClient.__new__(AlibabaOssObjectStoreClient)
+    client._client = _Client()
+    client._oss = _Sdk()
+    ref = Command.model_validate(fixture("valid-command.json")).runSpecRef.model_copy(
+        update={"sizeBytes": len(body), "sha256": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"})
+    assert client.get(ref, max_bytes=10) == body
+
+
 def test_grants_are_isolated_by_method():
     command = Command.model_validate(fixture("valid-command.json"))
     grant = Grant.model_validate(fixture("valid-grant.json")).model_copy(
