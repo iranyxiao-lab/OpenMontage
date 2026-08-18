@@ -384,6 +384,25 @@ class Runner:
                      occurredAt=now, workerId=self.config.worker_id, workerPool=self.config.pool,
                      channel=self.config.channel, stage=command.stage, checkpointRef=checkpoint, artifacts=artifacts or None)
 
+    def _started(self, command: Command) -> Event:
+        return Event(schemaVersion="openmontage.event.v1", eventId=f"event-{uuid.uuid4().hex}",
+                     jobId=command.jobId, taskId=command.taskId, runId=command.runId,
+                     attempt=command.attempt, runRevision=command.runRevision, type="StageStarted",
+                     occurredAt=datetime.now(timezone.utc), workerId=self.config.worker_id,
+                     workerPool=self.config.pool, channel=self.config.channel, stage=command.stage)
+
+    def _failure(self, command: Command, exc: Exception) -> Event:
+        text = str(exc).lower()
+        code = "TASK_GRANT_DENIED" if "task_grant_denied" in text else (
+            "TASK_GRANT_LIMIT_EXCEEDED" if "task_grant_limit_exceeded" in text else "WORKER_EXECUTION_FAILED")
+        summary = "task grant authorization failed" if code.startswith("TASK_GRANT") else "worker execution failed"
+        return Event(schemaVersion="openmontage.event.v1", eventId=f"event-{uuid.uuid4().hex}",
+                     jobId=command.jobId, taskId=command.taskId, runId=command.runId,
+                     attempt=command.attempt, runRevision=command.runRevision, type="TaskFailed",
+                     occurredAt=datetime.now(timezone.utc), workerId=self.config.worker_id,
+                     workerPool=self.config.pool, channel=self.config.channel, stage=command.stage,
+                     failure={"code": code, "retryable": code == "WORKER_EXECUTION_FAILED", "summary": summary})
+
     def loop(self) -> None:
         if self.transport is None:
             self.transport = RedisTransport(self.config)
@@ -400,14 +419,21 @@ class Runner:
                 finally:
                     self.transport.ack_grant(message_id)
             for message_id, fields in self.transport.read():
+                command = None
                 try:
                     command = Command.model_validate_json(fields["payload"])
+                    self.transport.publish(self._started(command))
                     event = self.handle(command)
                     self.transport.publish(event)
                     self.transport.ack(message_id)
-                except (ValidationError, ValueError, RuntimeError) as exc:
-                    # Invalid or cancelled deliveries converge into the isolated DLQ before ACK.
-                    self.transport.publish_dlq(type(exc).__name__ + ": " + str(exc))
+                except ValidationError as exc:
+                    self.transport.publish_dlq("ValidationError: invalid command")
+                    self.transport.ack(message_id)
+                except (ValueError, RuntimeError, PermissionError) as exc:
+                    if command is not None:
+                        self.transport.publish(self._failure(command, exc))
+                    else:
+                        self.transport.publish_dlq(type(exc).__name__ + ": invalid delivery")
                     self.transport.ack(message_id)
 
     def drain(self) -> None:

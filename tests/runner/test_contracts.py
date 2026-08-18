@@ -77,6 +77,15 @@ def test_runner_identity_is_idempotent_and_pool_is_frozen():
     assert first.workerPool == second.workerPool == "openmontage-planner"
 
 
+def test_worker_classifies_grant_denial_as_typed_failure():
+    command = Command.model_validate(fixture("valid-command.json"))
+    runner = Runner(RunnerConfig(require_grants=True))
+    event = runner._failure(command, PermissionError("task_grant_denied"))
+    assert event.type == "TaskFailed"
+    assert event.failure.code == "TASK_GRANT_DENIED"
+    assert event.failure.retryable is False
+
+
 def test_ready_endpoint_fails_while_draining():
     runner = Runner(RunnerConfig())
     app = create_app(runner)
