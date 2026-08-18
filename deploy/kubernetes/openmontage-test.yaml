@@ -2,7 +2,7 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: openmontage
-  namespace: test
+  namespace: openmontage-test
   labels:
     app.kubernetes.io/name: openmontage
     app.kubernetes.io/part-of: soulx
@@ -12,7 +12,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: openmontage-projects
-  namespace: test
+  namespace: openmontage-test
   labels:
     app.kubernetes.io/name: openmontage
     app.kubernetes.io/part-of: soulx
@@ -28,7 +28,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: openmontage
-  namespace: test
+  namespace: openmontage-test
   labels:
     app.kubernetes.io/name: openmontage
     app.kubernetes.io/part-of: soulx
@@ -159,7 +159,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: openmontage
-  namespace: test
+  namespace: openmontage-test
   annotations:
     service.beta.kubernetes.io/alibaba-cloud-loadbalancer-address-type: internet
     service.beta.kubernetes.io/alibaba-cloud-loadbalancer-ip-version: ipv4

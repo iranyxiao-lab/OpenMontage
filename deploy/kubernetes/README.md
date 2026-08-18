@@ -8,9 +8,10 @@ deploy/kubernetes/overlays/prod -> namespace openmontage-prod
 ```
 
 The historical `openmontage-test.yaml` is retained for source compatibility with the existing
-workspace change, but it is not a production entrypoint. It contains the old Backlot observer
-shape and must not be applied for the worker rollout. The overlays deploy headless Runner pools,
-with `biz-module-llm` remaining the business-facing control plane.
+workspace change and now targets `openmontage-test` rather than the shared `test` namespace. It is
+not a production entrypoint: it contains the old Backlot observer shape and must not be applied for
+the worker rollout. The overlays deploy headless Runner pools, with `biz-module-llm` remaining the
+business-facing control plane.
 
 Before applying an overlay, render it in CI and assert that no `Service` has `type: LoadBalancer`,
 no `PersistentVolumeClaim` uses `ReadWriteMany`, and every namespaced object targets the selected

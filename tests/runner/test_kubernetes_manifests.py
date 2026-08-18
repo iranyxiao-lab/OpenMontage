@@ -52,3 +52,10 @@ def test_oss_uses_virginia_environment_credentials_without_oidc_role_config():
     assert "ALIBABA_CLOUD_ROLE_ARN" not in kustomization
     assert "ALIBABA_CLOUD_OIDC_PROVIDER_ARN" not in kustomization
     assert "ALIBABA_CLOUD_OIDC_TOKEN_FILE" not in kustomization
+
+
+def test_legacy_test_manifest_targets_openmontage_namespace():
+    for doc in docs(ROOT / "openmontage-test.yaml"):
+        if doc.get("kind") == "Namespace":
+            continue
+        assert doc["metadata"].get("namespace") == "openmontage-test"
