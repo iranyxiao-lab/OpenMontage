@@ -57,6 +57,9 @@ def test_oss_uses_virginia_environment_credentials_without_oidc_role_config():
     assert "OPENMONTAGE_OSS_BUCKET, value: openmontage-oss" in kustomization
     assert "OPENMONTAGE_OSS_REGION, value: us-east-1" in kustomization
     assert "OPENMONTAGE_OSS_ENDPOINT, value: oss-us-east-1.aliyuncs.com" in kustomization
+    assert "name: OPENMONTAGE_REDIS_URL" in kustomization
+    assert "name: openmontage-redis" in kustomization
+    assert "key: url" in kustomization
     assert "ALIBABA_CLOUD_ROLE_ARN" not in kustomization
     assert "ALIBABA_CLOUD_OIDC_PROVIDER_ARN" not in kustomization
     assert "ALIBABA_CLOUD_OIDC_TOKEN_FILE" not in kustomization

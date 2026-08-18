@@ -85,6 +85,7 @@ pipeline {
           kubectl --context="${KUBE_CONTEXT}" apply -f "${DEPLOY_OVERLAY}/namespace.yaml" >/dev/null
           kubectl --context="${KUBE_CONTEXT}" get namespace "${DEPLOY_NAMESPACE}" >/dev/null
           kubectl --context="${KUBE_CONTEXT}" -n "${DEPLOY_NAMESPACE}" get secret openmontage-oss >/dev/null
+          kubectl --context="${KUBE_CONTEXT}" -n "${DEPLOY_NAMESPACE}" get secret openmontage-redis >/dev/null
         '''
       }
     }

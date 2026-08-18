@@ -37,3 +37,11 @@ patches:
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value: {name: OPENMONTAGE_REQUIRE_GRANTS, value: "true"}
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: OPENMONTAGE_REDIS_URL
+          valueFrom:
+            secretKeyRef:
+              name: openmontage-redis
+              key: url
