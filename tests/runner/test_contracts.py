@@ -7,7 +7,8 @@ import pytest
 from pydantic import ValidationError
 
 from openmontage.runner.contracts import Cancel, Command, Event, Grant, UserIntent
-from openmontage.runner.worker import AlibabaOssObjectStoreClient, GrantStore, PinnedManifestHeadlessAgent, Runner, RunnerConfig, StageExecutor, create_app
+from openmontage.runner import cluster_pipeline
+from openmontage.runner.worker import AlibabaOssObjectStoreClient, GrantStore, HeadlessAgent, PinnedManifestHeadlessAgent, Runner, RunnerConfig, StageExecutor, create_app
 
 
 _FIXTURE_ROOTS = (
@@ -107,6 +108,128 @@ def test_stage_executor_verifies_checkpoint_receipt_and_task_grant(tmp_path):
     store.add(grant)
     with pytest.raises(PermissionError):
         store.authorize(command, "PUT", "other-task/object", 1)
+
+
+class _PublishAgent(HeadlessAgent):
+    def run(self, command, workspace):
+        output = workspace / "renders" / "final.mp4"
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(b"preview-video")
+        return b'{"stage":"publish"}'
+
+
+def test_publish_stage_uploads_preview_artifact_and_emits_task_success(tmp_path):
+    command = Command.model_validate(fixture("valid-command.json")).model_copy(update={"stage": "publish"})
+    config = RunnerConfig(workspace_root=str(tmp_path))
+    executor = StageExecutor(config, agent=_PublishAgent())
+    event = Runner(config, executor=executor).handle(command)
+    assert event.type == "TaskSucceeded"
+    assert event.artifacts[0].name == "final.mp4"
+    assert event.artifacts[0].contentType == "video/mp4"
+    assert event.artifacts[0].objectKey.endswith("/artifacts/final.mp4")
+    assert "preview-video" not in event.model_dump_json()
+
+
+def test_publish_stage_without_media_is_non_retryable_failure(tmp_path):
+    command = Command.model_validate(fixture("valid-command.json")).model_copy(update={"stage": "publish"})
+    config = RunnerConfig(workspace_root=str(tmp_path))
+    runner = Runner(config)
+    with pytest.raises(RuntimeError, match="publish_artifact_missing"):
+        runner.handle(command)
+    event = runner._failure(command, RuntimeError("publish_artifact_missing"))
+    assert event.type == "TaskFailed"
+    assert event.failure.code == "PUBLISH_ARTIFACT_MISSING"
+    assert event.failure.retryable is False
+
+
+def test_cluster_pipeline_publish_generates_and_verifies_video(tmp_path, monkeypatch):
+    command = Command.model_validate(fixture("valid-command.json")).model_copy(update={
+        "stage": "publish",
+        "userIntent": UserIntent.model_validate({
+            "brief": "A singer performing on a small stage",
+            "sources": [{"kind": "prompt"}],
+            "production": {
+                "durationSeconds": 5,
+                "aspectRatio": "16:9",
+                "resolution": "720p",
+                "language": "en-US",
+                "voice": "neutral",
+                "subtitleStyle": "none",
+                "music": "none",
+                "visualStyle": "cinematic",
+                "budgetTier": "economy",
+            },
+        }),
+    })
+    calls = []
+
+    class _Result:
+        success = True
+
+    class _Sora:
+        def execute(self, inputs):
+            calls.append(inputs)
+            Path(inputs["output_path"]).write_bytes(b"video")
+            return _Result()
+
+    monkeypatch.setattr(cluster_pipeline, "SoraVideo", _Sora)
+    monkeypatch.setattr(cluster_pipeline, "_verify_video", lambda path: None)
+    payload = json.loads(cluster_pipeline.run(command, tmp_path).decode("utf-8"))
+    assert calls[0]["model"] == "sora-2"
+    assert calls[0]["seconds"] == "8"
+    assert calls[0]["size"] == "1280x720"
+    assert (tmp_path / "renders" / "final.mp4").is_file()
+    assert payload["result"] == {
+        "contentType": "video/mp4",
+        "model": "sora-2",
+        "name": "final.mp4",
+        "provider": "openai",
+        "route": "/v1/videos",
+    }
+    assert "A singer" not in json.dumps(payload)
+
+
+def test_cluster_pipeline_provider_failure_is_sanitized(tmp_path, monkeypatch):
+    command = Command.model_validate(fixture("valid-command.json")).model_copy(update={
+        "stage": "publish",
+        "userIntent": UserIntent.model_validate({
+            "brief": "A short test clip",
+            "sources": [{"kind": "prompt"}],
+            "production": {
+                "durationSeconds": 4,
+                "aspectRatio": "9:16",
+                "resolution": "720p",
+                "language": "en-US",
+                "voice": "neutral",
+                "subtitleStyle": "none",
+                "music": "none",
+                "visualStyle": "cinematic",
+                "budgetTier": "economy",
+            },
+        }),
+    })
+
+    class _Result:
+        success = False
+        error = "provider secret https://example.test/signed"
+
+    class _Sora:
+        def execute(self, inputs):
+            return _Result()
+
+    monkeypatch.setattr(cluster_pipeline, "SoraVideo", _Sora)
+    with pytest.raises(RuntimeError, match="^video_generation_failed$"):
+        cluster_pipeline.run(command, tmp_path)
+
+
+def test_heartbeat_event_preserves_attempt_identity():
+    command = Command.model_validate(fixture("valid-command.json"))
+    runner = Runner(RunnerConfig(channel="stable", pool="openmontage-planner"))
+    event = runner._heartbeat(command)
+    assert event.type == "Heartbeat"
+    assert event.runId == command.runId
+    assert event.attempt == command.attempt
+    assert event.runRevision == command.runRevision
 
 
 def test_inline_run_spec_skips_get_grant_and_writes_user_intent(tmp_path):

@@ -4,9 +4,11 @@ import hashlib
 import importlib
 import io
 import json
+import logging
 import os
 import re
 import signal
+import shutil
 import sys
 import threading
 import time
@@ -22,6 +24,9 @@ from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from .contracts import Cancel, Command, Event, Grant, Ref
+
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -245,7 +250,47 @@ class StageExecutor:
             self.grants.authorize(command, "HEAD", key, checkpoint.sizeBytes)
         if not self.object_store.head(checkpoint):
             raise RuntimeError("checkpoint_receipt_invalid")
-        return StageExecution(checkpoint=checkpoint, artifacts=[])
+        artifacts = self._publish_artifacts(command, workspace)
+        if command.stage == "publish" and not artifacts:
+            raise RuntimeError("publish_artifact_missing")
+        return StageExecution(checkpoint=checkpoint, artifacts=artifacts)
+
+    def _publish_artifacts(self, command: Command, workspace: Path) -> list[dict[str, Any]]:
+        """Upload media emitted by the headless publish stage without exposing local paths."""
+        if command.stage != "publish":
+            return []
+        candidates = [
+            path for path in (
+                workspace / "renders" / "final.mp4",
+                workspace / "final.mp4",
+                workspace / "renders" / "final.webm",
+                workspace / "final.webm",
+            ) if path.is_file()
+        ]
+        artifacts: list[dict[str, Any]] = []
+        for path in candidates[:8]:
+            body = path.read_bytes()
+            if not body:
+                continue
+            name = path.name
+            key = f"montage/{command.taskId}/run-{command.runRevision}/artifacts/{name}"
+            digest = "sha256:" + hashlib.sha256(body).hexdigest()
+            content_type = "video/mp4" if path.suffix.lower() == ".mp4" else "video/webm"
+            if self.config.require_grants:
+                self.grants.authorize(command, "PUT", key, len(body))
+            ref = self.object_store.put(key, body, sha256=digest, max_bytes=command.limits.maxOutputBytes)
+            if self.config.require_grants:
+                self.grants.authorize(command, "HEAD", key, ref.sizeBytes)
+            if not self.object_store.head(ref):
+                raise RuntimeError("artifact_receipt_invalid")
+            artifacts.append({
+                "name": name,
+                "objectKey": ref.objectKey,
+                "contentType": content_type,
+                "sizeBytes": ref.sizeBytes,
+                "eTag": ref.sha256,
+            })
+        return artifacts
 
     @staticmethod
     def _build_object_store(config: "RunnerConfig") -> ObjectStoreClient:
@@ -265,9 +310,7 @@ class StageExecutor:
     def cleanup(self, command: Command) -> None:
         root = Path(self.config.workspace_root) / command.jobId / f"revision-{command.runRevision}" / command.stage / f"attempt-{command.attempt}"
         if root.exists():
-            for path in sorted(root.rglob("*"), reverse=True):
-                if path.is_file(): path.unlink(missing_ok=True)
-            root.rmdir()
+            shutil.rmtree(root)
 
 
 def _json(value: Any) -> str:
@@ -289,6 +332,7 @@ class RunnerConfig:
     consumer_name: str = ""
     workspace_root: str = os.getenv("OPENMONTAGE_WORKSPACE_ROOT", tempfile.gettempdir() + "/openmontage-attempts")
     drain_timeout_seconds: int = int(os.getenv("OPENMONTAGE_DRAIN_TIMEOUT_SECONDS", "30"))
+    heartbeat_interval_seconds: int = int(os.getenv("OPENMONTAGE_HEARTBEAT_INTERVAL_SECONDS", "20"))
     require_grants: bool = os.getenv("OPENMONTAGE_REQUIRE_GRANTS", "false").lower() == "true"
     object_store: str = os.getenv("OPENMONTAGE_OBJECT_STORE", "memory")
     oss_bucket: str = os.getenv("OPENMONTAGE_OSS_BUCKET", "")
@@ -418,9 +462,10 @@ class Runner:
 
     def _success(self, command: Command, checkpoint: Ref | None = None, artifacts: list[dict[str, Any]] | None = None, deterministic: bool = False) -> Event:
         now = datetime.now(timezone.utc)
+        event_type = "TaskSucceeded" if command.stage == "publish" else "StageSucceeded"
         return Event(schemaVersion="openmontage.event.v1", eventId=f"event-{uuid.uuid4().hex}",
                      jobId=command.jobId, taskId=command.taskId, runId=command.runId,
-                     attempt=command.attempt, runRevision=command.runRevision, type="StageSucceeded",
+                     attempt=command.attempt, runRevision=command.runRevision, type=event_type,
                      occurredAt=now, workerId=self.config.worker_id, workerPool=self.config.pool,
                      channel=self.config.channel, stage=command.stage, checkpointRef=checkpoint, artifacts=artifacts or None)
 
@@ -434,14 +479,35 @@ class Runner:
     def _failure(self, command: Command, exc: Exception) -> Event:
         text = str(exc).lower()
         code = "TASK_GRANT_DENIED" if "task_grant_denied" in text else (
-            "TASK_GRANT_LIMIT_EXCEEDED" if "task_grant_limit_exceeded" in text else "WORKER_EXECUTION_FAILED")
-        summary = "task grant authorization failed" if code.startswith("TASK_GRANT") else "worker execution failed"
+            "TASK_GRANT_LIMIT_EXCEEDED" if "task_grant_limit_exceeded" in text else (
+                "PUBLISH_ARTIFACT_MISSING" if "publish_artifact_missing" in text else (
+                    "PUBLISH_ARTIFACT_INVALID" if "publish_artifact_invalid" in text else (
+                        "VIDEO_GENERATION_FAILED" if "video_generation_failed" in text else "WORKER_EXECUTION_FAILED"))))
+        retryable = code in {"VIDEO_GENERATION_FAILED", "WORKER_EXECUTION_FAILED"}
+        summary = "task grant authorization failed" if code.startswith("TASK_GRANT") else (
+            "publish stage produced no valid media" if code.startswith("PUBLISH_ARTIFACT") else (
+                "video generation failed" if code == "VIDEO_GENERATION_FAILED" else "worker execution failed"))
         return Event(schemaVersion="openmontage.event.v1", eventId=f"event-{uuid.uuid4().hex}",
                      jobId=command.jobId, taskId=command.taskId, runId=command.runId,
                      attempt=command.attempt, runRevision=command.runRevision, type="TaskFailed",
                      occurredAt=datetime.now(timezone.utc), workerId=self.config.worker_id,
                      workerPool=self.config.pool, channel=self.config.channel, stage=command.stage,
-                     failure={"code": code, "retryable": code == "WORKER_EXECUTION_FAILED", "summary": summary})
+                     failure={"code": code, "retryable": retryable, "summary": summary})
+
+    def _heartbeat(self, command: Command) -> Event:
+        return Event(schemaVersion="openmontage.event.v1", eventId=f"event-{uuid.uuid4().hex}",
+                     jobId=command.jobId, taskId=command.taskId, runId=command.runId,
+                     attempt=command.attempt, runRevision=command.runRevision, type="Heartbeat",
+                     occurredAt=datetime.now(timezone.utc), workerId=self.config.worker_id,
+                     workerPool=self.config.pool, channel=self.config.channel, stage=command.stage)
+
+    def _publish_heartbeats(self, command: Command, stopped: threading.Event) -> None:
+        interval = max(1, self.config.heartbeat_interval_seconds)
+        while not stopped.wait(interval):
+            try:
+                self.transport.publish(self._heartbeat(command))
+            except Exception as exc:
+                log.warning("event=openmontage.heartbeat.publish.failed errorType=%s", type(exc).__name__)
 
     def loop(self) -> None:
         if self.transport is None:
@@ -463,7 +529,18 @@ class Runner:
                 try:
                     command = Command.model_validate_json(fields["payload"])
                     self.transport.publish(self._started(command))
-                    event = self.handle(command)
+                    heartbeat_stopped = threading.Event()
+                    heartbeat_thread = threading.Thread(
+                        target=self._publish_heartbeats,
+                        args=(command, heartbeat_stopped),
+                        daemon=True,
+                    )
+                    heartbeat_thread.start()
+                    try:
+                        event = self.handle(command)
+                    finally:
+                        heartbeat_stopped.set()
+                        heartbeat_thread.join(timeout=1)
                     self.transport.publish(event)
                     self.transport.ack(message_id)
                 except ValidationError as exc:

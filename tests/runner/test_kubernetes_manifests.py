@@ -1,3 +1,4 @@
+import json
 import shutil
 import subprocess
 from pathlib import Path
@@ -7,6 +8,7 @@ import yaml
 
 
 ROOT = Path(__file__).resolve().parents[2] / "deploy" / "kubernetes"
+MANIFEST_ROOT = Path(__file__).resolve().parents[2] / "openmontage" / "runner" / "manifests"
 
 
 def docs(path: Path):
@@ -27,6 +29,9 @@ def test_base_has_isolated_pools_and_no_public_service():
         assert {mount["mountPath"] for mount in container["volumeMounts"]} >= {"/tmp"}
         tmp_volume = next(volume for volume in pod["volumes"] if volume["name"] == "tmp")
         assert tmp_volume["emptyDir"]["sizeLimit"]
+        environment = {item["name"]: item.get("value") for item in container.get("env", [])}
+        if deployment["metadata"]["name"] != "openmontage-gpu-stable":
+            assert environment["OPENMONTAGE_MANIFEST_ROOT"] == "/workspace/openmontage/runner/manifests"
     service = next(doc for doc in all_docs if doc["kind"] == "Service")
     assert service["spec"]["type"] == "ClusterIP"
 
@@ -137,6 +142,17 @@ def test_test_overlay_uses_minimal_worker_resources():
             "value": "8Gi",
         },
     ]
+
+
+def test_cluster_manifest_is_versioned_and_declares_all_stages():
+    versions = [path for path in MANIFEST_ROOT.iterdir() if path.is_dir()]
+    assert len(versions) == 1
+    manifest = json.loads((versions[0] / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["manifestVersion"] == f"sha256:{versions[0].name}"
+    assert set(manifest["stages"]) == {
+        "intake", "research", "proposal", "script", "scene_plan",
+        "assets", "edit", "compose", "publish",
+    }
 
 
 @pytest.mark.parametrize("environment", ["test", "prod"])

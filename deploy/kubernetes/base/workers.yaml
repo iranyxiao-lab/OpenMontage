@@ -18,7 +18,7 @@ spec:
         - name: runner
           image: openmontage-runner:base
           command: ["python", "-m", "openmontage.runner.worker"]
-          env: [{name: OPENMONTAGE_CHANNEL, value: stable}, {name: OPENMONTAGE_POOL, value: openmontage-planner}, {name: OPENMONTAGE_NAMESPACE, valueFrom: {fieldRef: {fieldPath: metadata.namespace}}}, {name: POD_UID, valueFrom: {fieldRef: {fieldPath: metadata.uid}}}]
+          env: [{name: OPENMONTAGE_CHANNEL, value: stable}, {name: OPENMONTAGE_POOL, value: openmontage-planner}, {name: OPENMONTAGE_MANIFEST_ROOT, value: /workspace/openmontage/runner/manifests}, {name: OPENMONTAGE_NAMESPACE, valueFrom: {fieldRef: {fieldPath: metadata.namespace}}}, {name: POD_UID, valueFrom: {fieldRef: {fieldPath: metadata.uid}}}]
           ports: [{name: metrics, containerPort: 4751}]
           readinessProbe: {httpGet: {path: /readyz, port: metrics}, periodSeconds: 5, failureThreshold: 2}
           livenessProbe: {httpGet: {path: /healthz, port: metrics}, periodSeconds: 30}
@@ -51,7 +51,7 @@ spec:
         - name: runner
           image: openmontage-runner:base
           command: ["python", "-m", "openmontage.runner.worker"]
-          env: [{name: OPENMONTAGE_CHANNEL, value: canary}, {name: OPENMONTAGE_POOL, value: openmontage-planner}]
+          env: [{name: OPENMONTAGE_CHANNEL, value: canary}, {name: OPENMONTAGE_POOL, value: openmontage-planner}, {name: OPENMONTAGE_MANIFEST_ROOT, value: /workspace/openmontage/runner/manifests}]
           ports: [{name: metrics, containerPort: 4751}]
           readinessProbe: {httpGet: {path: /readyz, port: metrics}, periodSeconds: 5}
           resources: {requests: {cpu: 250m, memory: 512Mi}, limits: {cpu: "2", memory: 2Gi}}
@@ -79,7 +79,7 @@ spec:
         - name: runner
           image: openmontage-runner:base
           command: ["python", "-m", "openmontage.runner.worker"]
-          env: [{name: OPENMONTAGE_CHANNEL, value: stable}, {name: OPENMONTAGE_POOL, value: openmontage-render}]
+          env: [{name: OPENMONTAGE_CHANNEL, value: stable}, {name: OPENMONTAGE_POOL, value: openmontage-render}, {name: OPENMONTAGE_MANIFEST_ROOT, value: /workspace/openmontage/runner/manifests}]
           ports: [{name: metrics, containerPort: 4751}]
           readinessProbe: {httpGet: {path: /readyz, port: metrics}, periodSeconds: 5, failureThreshold: 2}
           livenessProbe: {httpGet: {path: /healthz, port: metrics}, periodSeconds: 30}
@@ -106,7 +106,7 @@ spec:
         - name: runner
           image: openmontage-runner:base
           command: ["python", "-m", "openmontage.runner.worker"]
-          env: [{name: OPENMONTAGE_CHANNEL, value: canary}, {name: OPENMONTAGE_POOL, value: openmontage-render}]
+          env: [{name: OPENMONTAGE_CHANNEL, value: canary}, {name: OPENMONTAGE_POOL, value: openmontage-render}, {name: OPENMONTAGE_MANIFEST_ROOT, value: /workspace/openmontage/runner/manifests}]
           ports: [{name: metrics, containerPort: 4751}]
           readinessProbe: {httpGet: {path: /readyz, port: metrics}, periodSeconds: 5}
           resources: {requests: {cpu: "1", memory: 1Gi}, limits: {cpu: "4", memory: 8Gi}}
