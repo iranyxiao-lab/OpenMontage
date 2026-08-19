@@ -54,7 +54,8 @@ BAILIAN_TEXT = (
     "qwen3.6-max-preview", "qwen3.6-plus", "qwen3.7-flash", "qwen3.7-max",
     "qwen3.7-plus", "qwen3.8-max", "qwq-plus",
 )
-BAILIAN_IMAGE = ("qwen-image-3.0-pro", "qwen-image-edit", "qwen-image-plus")
+BAILIAN_IMAGE = ("qwen-image-3.0-pro", "qwen-image-plus")
+BAILIAN_IMAGE_EDIT = ("qwen-image-edit",)
 BAILIAN_TTS = (
     "qwen3-tts-flash", "qwen3-tts-flash-2025-09-18",
     "qwen3-tts-flash-realtime", "qwen3-tts-flash-realtime-2025-09-18",
@@ -87,7 +88,12 @@ def _entries() -> tuple[GatewayModel, ...]:
                                     input_types=("text", "image") if "vl" in model or "omni" in model else ("text",)))
     for model in BAILIAN_IMAGE:
         entries.append(GatewayModel(model, "ali", "image_generation", "bailian-native",
-                                    "/api/v1/services/aigc/image-generation/generation", input_types=("text", "image")))
+                                    "/api/v1/services/aigc/image-generation/generation",
+                                    "/api/v1/tasks/{task_id}", "/api/v1/tasks/{task_id}/cancel",
+                                    input_types=("text", "image"), cancel_method="POST"))
+    for model in BAILIAN_IMAGE_EDIT:
+        entries.append(GatewayModel(model, "ali", "image_generation", "openai-multipart",
+                                    "/v1/images/edits", input_types=("text", "image")))
     for model in BAILIAN_TTS:
         entries.append(GatewayModel(model, "ali", "tts", "openai-compatible", "/v1/audio/speech",
                                     input_types=("text",)))
@@ -99,8 +105,8 @@ def _entries() -> tuple[GatewayModel, ...]:
     for model in BAILIAN_IMAGE_VIDEO:
         entries.append(GatewayModel(model, "ali", "image_generation", "bailian-task",
                                     "/api/v1/services/aigc/image-generation/generation",
-                                    "/api/v1/tasks/{task_id}", None,
-                                    ("text", "image")))
+                                    "/api/v1/tasks/{task_id}", "/api/v1/tasks/{task_id}/cancel",
+                                    ("text", "image"), "POST"))
     for model in BAILIAN_STT:
         entries.append(GatewayModel(model, "ali", "stt", "bailian-task",
                                     "/api/v1/services/audio/asr/transcription", "/api/v1/tasks/{task_id}",
