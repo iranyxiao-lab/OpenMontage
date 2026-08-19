@@ -72,9 +72,43 @@ def test_legacy_test_manifest_targets_openmontage_namespace():
         assert doc["metadata"].get("namespace") == "openmontage-test"
 
 
-def test_test_overlay_reduces_render_cpu_request_only():
+def test_test_overlay_uses_minimal_worker_resources():
     overlay_path = ROOT / "overlays" / "test" / "kustomization.yaml"
     overlay = yaml.safe_load(overlay_path.read_text(encoding="utf-8"))
+    replica_patch = next(
+        patch for patch in overlay["patches"]
+        if patch["target"].get("name") == "openmontage-(planner|render)-stable"
+    )
+    assert yaml.safe_load(replica_patch["patch"]) == [
+        {"op": "replace", "path": "/spec/replicas", "value": 1}
+    ]
+    planner_patch = next(
+        patch for patch in overlay["patches"]
+        if patch["target"].get("name") == "openmontage-planner-(stable|canary)"
+    )
+    assert yaml.safe_load(planner_patch["patch"]) == [
+        {
+            "op": "replace",
+            "path": "/spec/template/spec/containers/0/resources",
+            "value": {
+                "requests": {
+                    "cpu": "100m",
+                    "memory": "128Mi",
+                    "ephemeral-storage": "256Mi",
+                },
+                "limits": {
+                    "cpu": "500m",
+                    "memory": "256Mi",
+                    "ephemeral-storage": "1Gi",
+                },
+            },
+        },
+        {
+            "op": "replace",
+            "path": "/spec/template/spec/volumes/0/emptyDir/sizeLimit",
+            "value": "1Gi",
+        },
+    ]
     render_patch = next(
         patch for patch in overlay["patches"]
         if patch["target"].get("name") == "openmontage-render-.*"
@@ -83,9 +117,25 @@ def test_test_overlay_reduces_render_cpu_request_only():
     assert operations == [
         {
             "op": "replace",
-            "path": "/spec/template/spec/containers/0/resources/requests/cpu",
-            "value": "250m",
-        }
+            "path": "/spec/template/spec/containers/0/resources",
+            "value": {
+                "requests": {
+                    "cpu": "250m",
+                    "memory": "512Mi",
+                    "ephemeral-storage": "1Gi",
+                },
+                "limits": {
+                    "cpu": "2",
+                    "memory": "2Gi",
+                    "ephemeral-storage": "8Gi",
+                },
+            },
+        },
+        {
+            "op": "replace",
+            "path": "/spec/template/spec/volumes/0/emptyDir/sizeLimit",
+            "value": "8Gi",
+        },
     ]
 
 
