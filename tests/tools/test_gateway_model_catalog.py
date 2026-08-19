@@ -43,8 +43,14 @@ def test_protocol_routes_are_explicit():
     bailian_image = KNOWN_MODELS["qwen-image-3.0-pro"]
     assert bailian_image.protocol == "bailian-native"
     assert bailian_image.submit_path == "/api/v1/services/aigc/image-generation/generation"
+    bailian_edit = KNOWN_MODELS["qwen-image-edit"]
+    assert bailian_edit.protocol == "openai-multipart"
+    assert bailian_edit.submit_path == "/v1/images/edits"
     assert KNOWN_MODELS["wan2.7-i2v"].cancel_path is None
     assert KNOWN_MODELS["fun-asr"].query_path == "/api/v1/tasks/{task_id}"
+    assert KNOWN_MODELS["qwen-image-3.0-pro"].query_path == "/api/v1/tasks/{task_id}"
+    assert KNOWN_MODELS["qwen-image-3.0-pro"].cancel_method == "POST"
+    assert KNOWN_MODELS["wan2.7-image"].cancel_method == "POST"
 
 
 def test_require_model_fails_closed_for_missing_or_wrong_capability():

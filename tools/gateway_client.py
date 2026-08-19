@@ -8,6 +8,7 @@ client and must not silently fall back to a vendor endpoint.
 from __future__ import annotations
 
 import os
+import json
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -23,6 +24,11 @@ class GatewayConfigurationError(RuntimeError):
 
 class GatewayRequestError(RuntimeError):
     """Raised for a gateway request after bounded retries."""
+
+    def __init__(self, message: str, *, status_code: int | None = None, code: str | None = None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.code = code
 
 
 @dataclass(frozen=True)
@@ -148,19 +154,71 @@ class GatewayClient:
                     json=payload,
                     timeout=timeout,
                 )
-                if response.status_code in {408, 429} or response.status_code >= 500:
-                    response.raise_for_status()
-                response.raise_for_status()
+                self._raise_for_status(response)
                 body = response.json()
                 if not isinstance(body, dict):
                     raise GatewayRequestError("Gateway response was not an object")
                 return body
             except (requests.RequestException, ValueError, GatewayRequestError) as exc:
                 last_error = exc
-                if attempt == attempts - 1:
+                if attempt == attempts - 1 or _is_permanent_request_error(exc):
                     break
                 time.sleep(0.25 * (2**attempt))
+        if isinstance(last_error, GatewayRequestError):
+            raise last_error
         raise GatewayRequestError(redact_error(last_error or "gateway request failed"))
+
+    def request_bytes(
+        self,
+        method: str,
+        path: str,
+        *,
+        payload: dict[str, Any] | None = None,
+        timeout: float = 120.0,
+        retryable: bool = True,
+    ) -> bytes:
+        """Return a binary provider response without attempting JSON decoding."""
+
+        url = f"{self.config.base_url}/{path.lstrip('/')}"
+        last_error: BaseException | None = None
+        attempts = 3 if retryable else 1
+        for attempt in range(attempts):
+            try:
+                response = requests.request(
+                    method,
+                    url,
+                    headers=self._headers,
+                    json=payload,
+                    timeout=timeout,
+                )
+                self._raise_for_status(response)
+                return response.content
+            except (requests.RequestException, GatewayRequestError) as exc:
+                last_error = exc
+                if attempt == attempts - 1 or _is_permanent_request_error(exc):
+                    break
+                time.sleep(0.25 * (2**attempt))
+        if isinstance(last_error, GatewayRequestError):
+            raise last_error
+        raise GatewayRequestError(redact_error(last_error or "gateway request failed"))
+
+    def _raise_for_status(self, response: requests.Response) -> None:
+        if response.status_code < 400:
+            return
+        code = None
+        try:
+            body = response.json()
+            if isinstance(body, dict):
+                error = body.get("error")
+                code = body.get("code") or (error.get("code") if isinstance(error, dict) else None)
+        except ValueError:
+            pass
+        safe_code = str(code).strip()[:128] if code else None
+        raise GatewayRequestError(
+            f"gateway request failed: HTTP {response.status_code} code={safe_code or 'unknown'}",
+            status_code=response.status_code,
+            code=safe_code,
+        )
 
     def models(self) -> list[str]:
         return [item["id"] for item in self.model_records()]
@@ -213,29 +271,72 @@ class GatewayClient:
         return self.request_json("POST", "/v1/chat/completions", payload={"model": model, "messages": messages, **kwargs})
 
     def model_chat(self, *, model: str, messages: list[dict[str, Any]], **kwargs: Any) -> dict[str, Any]:
+        if kwargs.get("stream"):
+            return self._stream_chat(model=model, messages=messages, kwargs=kwargs)
         return self.model_request(
             model=model,
             capability="chat",
             payload={"messages": messages, **kwargs, "model": model},
         )
 
+    def _stream_chat(
+        self,
+        *,
+        model: str,
+        messages: list[dict[str, Any]],
+        kwargs: dict[str, Any],
+    ) -> dict[str, Any]:
+        item = self.resolve_model(model, "chat")
+        payload = {"messages": messages, **kwargs, "model": model}
+        response = requests.post(
+            f"{self.config.base_url}/{item.submit_path.lstrip('/')}",
+            headers=self._headers,
+            json=payload,
+            timeout=180.0,
+        )
+        self._raise_for_status(response)
+        content: list[str] = []
+        final: dict[str, Any] = {"choices": [{"index": 0, "message": {"role": "assistant", "content": ""}}]}
+        for line in response.text.splitlines():
+            if not line.startswith("data:"):
+                continue
+            value = line[5:].strip()
+            if value == "[DONE]":
+                break
+            try:
+                chunk = json.loads(value)
+            except ValueError:
+                continue
+            if not isinstance(chunk, dict):
+                continue
+            choices = chunk.get("choices")
+            if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+                delta = choices[0].get("delta")
+                if isinstance(delta, dict) and isinstance(delta.get("content"), str):
+                    content.append(delta["content"])
+                final["id"] = chunk.get("id")
+                final["model"] = chunk.get("model", model)
+        final["choices"][0]["message"]["content"] = "".join(content)
+        return final
+
     def image(self, *, model: str, prompt: str, **kwargs: Any) -> dict[str, Any]:
         return self.request_json("POST", "/v1/images/generations", payload={"model": model, "prompt": prompt, **kwargs})
 
     def model_image(self, *, model: str, prompt: str, **kwargs: Any) -> dict[str, Any]:
         item = self.resolve_model(model, "image_generation")
+        if item.protocol == "openai-multipart":
+            raise GatewayRequestError("Use model_image_edit for multipart image-edit models")
         if item.protocol == "bailian-native":
             native_input = kwargs.pop("input", None)
             if not isinstance(native_input, dict):
                 native_input = {"prompt": prompt}
             elif "prompt" not in native_input and prompt:
                 native_input = {**native_input, "prompt": prompt}
-            payload = {
-                "input": native_input,
-                "parameters": kwargs,
-                "model": model,
-            }
+            payload = {"input": native_input, "parameters": kwargs, "model": model}
             return self.request_json("POST", item.submit_path, payload=payload, retryable=False)
+        if item.protocol == "bailian-task":
+            payload = {"model": model, "input": {"prompt": prompt}, "parameters": kwargs}
+            return self.submit_task(model=model, capability="image_generation", payload=payload)
         return self.model_request(
             model=model,
             capability="image_generation",
@@ -267,10 +368,37 @@ class GatewayClient:
     def speech(self, *, model: str, input: str, voice: str, **kwargs: Any) -> dict[str, Any]:
         return self.request_json("POST", "/v1/audio/speech", payload={"model": model, "input": input, "voice": voice, **kwargs})
 
-    def model_speech(self, *, model: str, input: str, voice: str, **kwargs: Any) -> dict[str, Any]:
-        return self.model_request(
-            model=model,
-            capability="tts",
+    def model_image_edit(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        image: bytes,
+        image_name: str = "input.png",
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        item = self.resolve_model(model, "image_generation")
+        if item.protocol != "openai-multipart":
+            raise GatewayRequestError(f"gateway model {model} is not an image-edit model")
+        headers = {key: value for key, value in self._headers.items() if key != "Content-Type"}
+        response = requests.post(
+            f"{self.config.base_url}/{item.submit_path.lstrip('/')}",
+            headers=headers,
+            data={"model": model, "prompt": prompt, **kwargs},
+            files={"image": (image_name, image, "image/png")},
+            timeout=180.0,
+        )
+        self._raise_for_status(response)
+        body = response.json()
+        if not isinstance(body, dict):
+            raise GatewayRequestError("Gateway response was not an object")
+        return body
+
+    def model_speech(self, *, model: str, input: str, voice: str, **kwargs: Any) -> bytes:
+        item = self.resolve_model(model, "tts")
+        return self.request_bytes(
+            "POST",
+            item.submit_path,
             payload={"input": input, "voice": voice, **kwargs, "model": model},
         )
 
@@ -368,6 +496,15 @@ def _task_status(body: dict[str, Any]) -> str:
     output_status = output.get("task_status") if isinstance(output, dict) else None
     value = body.get("status") or body.get("task_status") or output_status
     return str(value or "").strip().lower()
+
+
+def _is_permanent_request_error(error: BaseException) -> bool:
+    return (
+        isinstance(error, GatewayRequestError)
+        and error.status_code is not None
+        and error.status_code not in {408, 429}
+        and error.status_code < 500
+    )
 
 
 def _result_url(body: dict[str, Any]) -> str:

@@ -126,7 +126,7 @@ def test_task_submission_is_not_retried(monkeypatch):
         return Response()
 
     monkeypatch.setattr("tools.gateway_client.requests.request", request)
-    with pytest.raises(Exception, match="status 503"):
+    with pytest.raises(Exception, match="HTTP 503"):
         GatewayClient(config).submit_task(
             model="dreamina-seedance-2-0-fast-260128",
             capability="video_generation",
@@ -160,3 +160,53 @@ def test_fun_asr_requires_an_https_object_url(monkeypatch):
     )
     with pytest.raises(Exception, match="HTTPS file URL"):
         GatewayClient(config).model_transcription(model="fun-asr", file_url="http://example.test/a.wav")
+
+
+def test_binary_speech_response_is_not_decoded_as_json(monkeypatch):
+    from tools.gateway_model_catalog import KNOWN_MODELS
+
+    config = GatewayConfig("http://gateway.example", "secret-key", "sondo")
+
+    class Response:
+        status_code = 200
+        content = b"audio-bytes"
+
+    monkeypatch.setattr("tools.gateway_client.GatewayClient.resolve_model", lambda *args: KNOWN_MODELS["qwen3-tts-flash"])
+    monkeypatch.setattr("tools.gateway_client.requests.request", lambda *args, **kwargs: Response())
+    assert GatewayClient(config).model_speech(
+        model="qwen3-tts-flash", input="hello", voice="Cherry"
+    ) == b"audio-bytes"
+
+
+def test_structured_gateway_error_exposes_only_status_and_code(monkeypatch):
+    config = GatewayConfig("http://gateway.example", "secret-key", "sondo")
+
+    class Response:
+        status_code = 403
+
+        def json(self):
+            return {"code": "AccessDenied", "message": "sensitive provider detail"}
+
+    monkeypatch.setattr("tools.gateway_client.requests.request", lambda *args, **kwargs: Response())
+    with pytest.raises(Exception) as caught:
+        GatewayClient(config).request_json("GET", "/test")
+    assert caught.value.status_code == 403
+    assert caught.value.code == "AccessDenied"
+    assert "sensitive provider detail" not in str(caught.value)
+
+
+def test_streaming_chat_is_aggregated_without_logging_payload(monkeypatch):
+    from tools.gateway_model_catalog import KNOWN_MODELS
+
+    config = GatewayConfig("http://gateway.example", "secret-key", "sondo")
+
+    class Response:
+        status_code = 200
+        text = 'data: {"choices":[{"delta":{"content":"OK"}}]}\n\ndata: [DONE]\n'
+
+    monkeypatch.setattr("tools.gateway_client.GatewayClient.resolve_model", lambda *args: KNOWN_MODELS["qvq-max"])
+    monkeypatch.setattr("tools.gateway_client.requests.post", lambda *args, **kwargs: Response())
+    result = GatewayClient(config).model_chat(
+        model="qvq-max", messages=[{"role": "user", "content": "x"}], stream=True
+    )
+    assert result["choices"][0]["message"]["content"] == "OK"
