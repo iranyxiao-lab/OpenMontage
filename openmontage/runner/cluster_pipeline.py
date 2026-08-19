@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any
 
 from tools.video.sora_video import SoraVideo
+from tools.gateway_client import GatewayClient, GatewayRequestError, gateway_configured
+from tools.gateway_model_catalog import GatewayModel
 
 
 _STAGES = {
@@ -43,24 +45,34 @@ def run(command: Any, workspace: Path) -> bytes:
 
     output = workspace / "renders" / "final.mp4"
     output.parent.mkdir(parents=True, exist_ok=True)
-    model = os.getenv("OPENMONTAGE_VIDEO_MODEL", "sora-2").strip() or "sora-2"
-    result = SoraVideo().execute({
-        "prompt": _video_prompt(intent),
-        "model": model,
-        "size": _video_size(intent.production.aspectRatio),
-        "seconds": _video_seconds(intent.production.durationSeconds),
-        "output_path": str(output),
-    })
-    if not result.success:
-        raise RuntimeError("video_generation_failed")
+    model = (intent.production.model or os.getenv("OPENMONTAGE_VIDEO_MODEL", "sora-2")).strip() or "sora-2"
+    if model in {"sora-2", "sora-2-pro"}:
+        result = SoraVideo().execute({
+            "prompt": _video_prompt(intent),
+            "model": model,
+            "size": _video_size(intent.production.aspectRatio),
+            "seconds": _video_seconds(intent.production.durationSeconds),
+            "output_path": str(output),
+        })
+        if not result.success:
+            raise RuntimeError("video_generation_failed")
+        provider = "openai"
+        route = "/v1/videos"
+    else:
+        if not gateway_configured():
+            raise RuntimeError("gateway_configuration_missing")
+        try:
+            provider, route = _generate_gateway_video(model, intent, output)
+        except GatewayRequestError as exc:
+            raise RuntimeError("gateway_video_generation_failed") from exc
 
     _verify_video(output)
     checkpoint["result"] = {
         "name": output.name,
         "contentType": "video/mp4",
-        "provider": "openai",
+        "provider": provider,
         "model": model,
-        "route": "/v1/videos",
+        "route": route,
     }
     return _encode(checkpoint)
 
@@ -84,6 +96,47 @@ def _video_seconds(duration_seconds: int) -> str:
     if duration_seconds <= 8:
         return "8"
     return "12"
+
+
+def _generate_gateway_video(model: str, intent: Any, output: Path) -> tuple[str, str]:
+    client = GatewayClient()
+    item: GatewayModel = client.resolve_model(model, "video_generation")
+    prompt = _video_prompt(intent)
+    if item.protocol == "byteplus-task":
+        payload: dict[str, Any] = {
+            "model": model,
+            "content": [{"type": "text", "text": prompt}],
+            "ratio": intent.production.aspectRatio,
+            "duration": min(intent.production.durationSeconds, 12),
+            "generate_audio": True,
+            "watermark": False,
+        }
+    else:
+        payload = {
+            "model": model,
+            "input": {"prompt": prompt},
+            "parameters": {
+                "duration": min(intent.production.durationSeconds, 10),
+                "resolution": intent.production.resolution.upper(),
+                "watermark": False,
+                "audio": True,
+            },
+        }
+    submitted = client.submit_task(model=model, capability="video_generation", payload=payload)
+    output_body = submitted.get("output")
+    output_task_id = output_body.get("task_id") if isinstance(output_body, dict) else None
+    task_id = str(submitted.get("id") or submitted.get("task_id") or output_task_id or "").strip()
+    if not task_id:
+        raise GatewayRequestError("gateway video submit returned no task id")
+    terminal = client.poll_task_until_terminal(
+        model=model,
+        capability="video_generation",
+        task_id=task_id,
+        timeout=900.0,
+    )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    client.download_task_result(terminal, str(output))
+    return item.channel, item.submit_path
 
 
 def _verify_video(path: Path) -> None:

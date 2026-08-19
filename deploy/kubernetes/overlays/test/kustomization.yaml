@@ -3,6 +3,7 @@ kind: Kustomization
 namespace: openmontage-test
 resources:
   - namespace.yaml
+  - gateway-models-configmap.yaml
   - ../../base
 images:
   - name: openmontage-runner
@@ -61,4 +62,10 @@ patches:
         value:
           secretRef:
             name: openmontage-providers
+            optional: true
+      - op: add
+        path: /spec/template/spec/containers/0/envFrom/-
+        value:
+          configMapRef:
+            name: openmontage-gateway-models
             optional: true
