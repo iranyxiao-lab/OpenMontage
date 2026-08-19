@@ -11,11 +11,47 @@ images:
 patches:
   - target:
       kind: Deployment
+      name: openmontage-(planner|render)-stable
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+  - target:
+      kind: Deployment
+      name: openmontage-planner-(stable|canary)
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+            ephemeral-storage: 256Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+            ephemeral-storage: 1Gi
+      - op: replace
+        path: /spec/template/spec/volumes/0/emptyDir/sizeLimit
+        value: 1Gi
+  - target:
+      kind: Deployment
       name: openmontage-render-.*
     patch: |-
       - op: replace
-        path: /spec/template/spec/containers/0/resources/requests/cpu
-        value: 250m
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests:
+            cpu: 250m
+            memory: 512Mi
+            ephemeral-storage: 1Gi
+          limits:
+            cpu: "2"
+            memory: 2Gi
+            ephemeral-storage: 8Gi
+      - op: replace
+        path: /spec/template/spec/volumes/0/emptyDir/sizeLimit
+        value: 8Gi
   - target:
       kind: Deployment
       name: openmontage-(planner|render)-(stable|canary)
