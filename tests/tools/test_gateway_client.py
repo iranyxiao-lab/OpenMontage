@@ -73,8 +73,90 @@ def test_gateway_request_retries_and_model_catalog_is_id_only(monkeypatch):
     assert calls[0][2]["headers"]["Authorization"] == "Bearer secret-key"
 
 
+def test_model_records_keep_only_non_sensitive_catalog_fields(monkeypatch):
+    config = GatewayConfig("http://gateway.example", "secret-key", "sondo")
+
+    class Response:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "data": [{
+                    "id": "qwen-plus",
+                    "owned_by": "ali",
+                    "supported_endpoint_types": ["openai"],
+                    "api_key": "must-not-leak",
+                }]
+            }
+
+    monkeypatch.setattr("tools.gateway_client.requests.request", lambda *args, **kwargs: Response())
+    assert GatewayClient(config).model_records() == [{
+        "id": "qwen-plus",
+        "owned_by": "ali",
+        "supported_endpoint_types": ["openai"],
+    }]
+
+
+def test_task_submission_is_not_retried(monkeypatch):
+    config = GatewayConfig("http://gateway.example", "secret-key", "sondo")
+    calls = []
+
+    class Response:
+        status_code = 503
+
+        def raise_for_status(self):
+            raise requests.HTTPError("status 503")
+
+        def json(self):
+            return {}
+
+    def request(*args, **kwargs):
+        calls.append((args, kwargs))
+        if args[0] == "GET":
+            class Models:
+                status_code = 200
+                def raise_for_status(self):
+                    return None
+                def json(self):
+                    return {"data": [{"id": "dreamina-seedance-2-0-fast-260128", "owned_by": "byteplus-modelark"}]}
+            return Models()
+        return Response()
+
+    monkeypatch.setattr("tools.gateway_client.requests.request", request)
+    with pytest.raises(Exception, match="status 503"):
+        GatewayClient(config).submit_task(
+            model="dreamina-seedance-2-0-fast-260128",
+            capability="video_generation",
+            payload={"model": "dreamina-seedance-2-0-fast-260128"},
+        )
+    assert len(calls) == 2  # one catalog read and one non-retried submit
+
+
 def test_error_redaction_removes_key_and_urls(monkeypatch):
     monkeypatch.setenv("OPENMONTAGE_GATEWAY_API_KEY", "secret-key")
     safe = redact_error("secret-key https://gateway.example/v1?signature=abc details")
     assert "secret-key" not in safe
     assert "https://" not in safe
+
+
+def test_task_helpers_ignore_non_object_nested_values():
+    from tools.gateway_client import _result_url, _task_status
+
+    assert _task_status({"output": "not-an-object"}) == ""
+    assert _result_url({"output": ["not-an-object"], "content": "not-an-object"}) == ""
+    assert _result_url({"output": {"results": [{"url": "https://media.example/image.png"}]}}) == "https://media.example/image.png"
+
+
+def test_fun_asr_requires_an_https_object_url(monkeypatch):
+    from tools.gateway_client import GatewayClient
+
+    config = GatewayConfig("http://gateway.example", "secret-key", "sondo")
+    monkeypatch.setattr(
+        "tools.gateway_client.GatewayClient.resolve_model",
+        lambda self, model, capability: __import__("tools.gateway_model_catalog", fromlist=["KNOWN_MODELS"]).KNOWN_MODELS["fun-asr"],
+    )
+    with pytest.raises(Exception, match="HTTPS file URL"):
+        GatewayClient(config).model_transcription(model="fun-asr", file_url="http://example.test/a.wav")

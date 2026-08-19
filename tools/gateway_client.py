@@ -14,6 +14,8 @@ from typing import Any
 
 import requests
 
+from tools.gateway_model_catalog import GatewayModel, model_catalog, visible_models
+
 
 class GatewayConfigurationError(RuntimeError):
     """Raised when gateway configuration is incomplete or invalid."""
@@ -132,10 +134,12 @@ class GatewayClient:
         *,
         payload: dict[str, Any] | None = None,
         timeout: float = 120.0,
+        retryable: bool = True,
     ) -> dict[str, Any]:
         url = f"{self.config.base_url}/{path.lstrip('/')}"
         last_error: BaseException | None = None
-        for attempt in range(3):
+        attempts = 3 if retryable else 1
+        for attempt in range(attempts):
             try:
                 response = requests.request(
                     method,
@@ -153,26 +157,127 @@ class GatewayClient:
                 return body
             except (requests.RequestException, ValueError, GatewayRequestError) as exc:
                 last_error = exc
-                if attempt == 2:
+                if attempt == attempts - 1:
                     break
                 time.sleep(0.25 * (2**attempt))
         raise GatewayRequestError(redact_error(last_error or "gateway request failed"))
 
     def models(self) -> list[str]:
+        return [item["id"] for item in self.model_records()]
+
+    def model_records(self) -> list[dict[str, Any]]:
+        """Return the non-sensitive model records advertised by the gateway."""
+
         body = self.request_json("GET", "/v1/models", timeout=30.0)
         data = body.get("data", [])
         if not isinstance(data, list):
             return []
-        return [str(item.get("id")) for item in data if isinstance(item, dict) and item.get("id")]
+        return [
+            {
+                key: item[key]
+                for key in ("id", "object", "created", "owned_by", "supported_endpoint_types")
+                if key in item
+            }
+            for item in data
+            if isinstance(item, dict) and item.get("id")
+        ]
+
+    def catalog(self) -> dict[str, GatewayModel]:
+        """Return registered models that are visible and owned by the expected channel."""
+
+        return visible_models(self.model_records())
+
+    def resolve_model(self, model: str, capability: str) -> GatewayModel:
+        item = self.catalog().get(model)
+        if item is None:
+            raise GatewayRequestError(f"gateway model is unavailable: {model}")
+        if item.capability != capability:
+            raise GatewayRequestError(f"gateway model {model} does not support {capability}")
+        return item
+
+    def model_request(
+        self,
+        *,
+        model: str,
+        capability: str,
+        payload: dict[str, Any],
+        timeout: float = 120.0,
+        retryable: bool = True,
+    ) -> dict[str, Any]:
+        item = self.resolve_model(model, capability)
+        return self.request_json(
+            "POST", item.submit_path, payload=payload, timeout=timeout, retryable=retryable
+        )
 
     def chat(self, *, model: str, messages: list[dict[str, Any]], **kwargs: Any) -> dict[str, Any]:
         return self.request_json("POST", "/v1/chat/completions", payload={"model": model, "messages": messages, **kwargs})
 
+    def model_chat(self, *, model: str, messages: list[dict[str, Any]], **kwargs: Any) -> dict[str, Any]:
+        return self.model_request(
+            model=model,
+            capability="chat",
+            payload={"messages": messages, **kwargs, "model": model},
+        )
+
     def image(self, *, model: str, prompt: str, **kwargs: Any) -> dict[str, Any]:
         return self.request_json("POST", "/v1/images/generations", payload={"model": model, "prompt": prompt, **kwargs})
 
+    def model_image(self, *, model: str, prompt: str, **kwargs: Any) -> dict[str, Any]:
+        item = self.resolve_model(model, "image_generation")
+        if item.protocol == "bailian-native":
+            native_input = kwargs.pop("input", None)
+            if not isinstance(native_input, dict):
+                native_input = {"prompt": prompt}
+            elif "prompt" not in native_input and prompt:
+                native_input = {**native_input, "prompt": prompt}
+            payload = {
+                "input": native_input,
+                "parameters": kwargs,
+                "model": model,
+            }
+            return self.request_json("POST", item.submit_path, payload=payload, retryable=False)
+        return self.model_request(
+            model=model,
+            capability="image_generation",
+            payload={"prompt": prompt, **kwargs, "model": model},
+            retryable=False,
+        )
+
+    def model_transcription(self, *, model: str, file_url: str, **kwargs: Any) -> dict[str, Any]:
+        """Submit Fun-ASR using its native public-URL contract.
+
+        The gateway intentionally does not accept local file paths for this
+        provider. Callers must first persist the audio to an approved object
+        store and pass the resulting HTTPS URL.
+        """
+
+        item = self.resolve_model(model, "stt")
+        if item.protocol != "bailian-task":
+            raise GatewayRequestError(f"gateway model {model} does not support native transcription")
+        file_url = file_url.strip()
+        if not file_url.startswith("https://"):
+            raise GatewayRequestError("transcription requires an HTTPS file URL")
+        payload = {
+            "input": {"file_urls": [file_url]},
+            **kwargs,
+            "model": model,
+        }
+        return self.submit_task(model=model, capability="stt", payload=payload)
+
     def speech(self, *, model: str, input: str, voice: str, **kwargs: Any) -> dict[str, Any]:
         return self.request_json("POST", "/v1/audio/speech", payload={"model": model, "input": input, "voice": voice, **kwargs})
+
+    def model_speech(self, *, model: str, input: str, voice: str, **kwargs: Any) -> dict[str, Any]:
+        return self.model_request(
+            model=model,
+            capability="tts",
+            payload={"input": input, "voice": voice, **kwargs, "model": model},
+        )
+
+    def native_model(self, *, model: str, capability: str, payload: dict[str, Any], timeout: float = 120.0) -> dict[str, Any]:
+        """Send a provider-native JSON request using the registered route."""
+
+        return self.submit_task(model=model, capability=capability, payload=payload, timeout=timeout)
 
     def transcription(self, *, model: str, file: Any, **kwargs: Any) -> dict[str, Any]:
         """Transcription is multipart at the gateway; callers can use the SDK for this route."""
@@ -181,6 +286,71 @@ class GatewayClient:
 
     def embedding(self, *, model: str, input: str | list[str], **kwargs: Any) -> dict[str, Any]:
         return self.request_json("POST", "/v1/embeddings", payload={"model": model, "input": input, **kwargs})
+
+    def model_embedding(self, *, model: str, input: str | list[str], **kwargs: Any) -> dict[str, Any]:
+        return self.model_request(
+            model=model,
+            capability="embedding",
+            payload={"input": input, **kwargs, "model": model},
+        )
+
+    def submit_task(self, *, model: str, capability: str, payload: dict[str, Any], timeout: float = 120.0) -> dict[str, Any]:
+        """Submit a paid async task without retrying an ambiguous write."""
+
+        return self.model_request(
+            model=model, capability=capability, payload=payload, timeout=timeout, retryable=False
+        )
+
+    def task(self, *, model: str, capability: str, task_id: str, timeout: float = 60.0) -> dict[str, Any]:
+        item = self.resolve_model(model, capability)
+        if not item.query_path:
+            raise GatewayRequestError(f"gateway model has no query route: {model}")
+        return self.request_json(
+            "GET", item.query_path.replace("{task_id}", task_id), timeout=timeout
+        )
+
+    def cancel_task(self, *, model: str, capability: str, task_id: str, timeout: float = 60.0) -> dict[str, Any]:
+        item = self.resolve_model(model, capability)
+        if not item.cancel_path:
+            raise GatewayRequestError(f"gateway model has no cancel route: {model}")
+        return self.request_json(
+            item.cancel_method,
+            item.cancel_path.replace("{task_id}", task_id),
+            timeout=timeout,
+            retryable=False,
+        )
+
+    def poll_task_until_terminal(
+        self,
+        *,
+        model: str,
+        capability: str,
+        task_id: str,
+        timeout: float = 900.0,
+        interval: float = 2.0,
+    ) -> dict[str, Any]:
+        """Poll a registered task without logging provider response payloads."""
+
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            body = self.task(model=model, capability=capability, task_id=task_id)
+            status = _task_status(body)
+            if status in {"succeeded", "success", "completed", "failed", "cancelled", "canceled", "error"}:
+                return body
+            time.sleep(min(interval, max(0.0, deadline - time.monotonic())))
+        raise GatewayRequestError("gateway task polling timed out")
+
+    def download_task_result(self, body: dict[str, Any], output_path: str) -> str:
+        """Download a terminal task URL without persisting the signed URL."""
+
+        url = _result_url(body)
+        if not url:
+            raise GatewayRequestError("gateway task returned no media URL")
+        response = requests.get(url, timeout=180.0, allow_redirects=False)
+        response.raise_for_status()
+        with open(output_path, "wb") as stream:
+            stream.write(response.content)
+        return output_path
 
     def native(self, path: str, payload: dict[str, Any], *, timeout: float = 120.0) -> dict[str, Any]:
         """Call a gateway-native route for protocols outside OpenAI SDK."""
@@ -191,3 +361,31 @@ class GatewayClient:
         """Read an async task state without exposing response contents to logs."""
 
         return self.request_json("GET", path, timeout=timeout)
+
+
+def _task_status(body: dict[str, Any]) -> str:
+    output = body.get("output")
+    output_status = output.get("task_status") if isinstance(output, dict) else None
+    value = body.get("status") or body.get("task_status") or output_status
+    return str(value or "").strip().lower()
+
+
+def _result_url(body: dict[str, Any]) -> str:
+    content = body.get("content")
+    output = body.get("output")
+    content_url = content.get("video_url") if isinstance(content, dict) else None
+    output_video_url = output.get("video_url") if isinstance(output, dict) else None
+    output_url = output.get("url") if isinstance(output, dict) else None
+    output_results = output.get("results") if isinstance(output, dict) else None
+    first_result = output_results[0] if isinstance(output_results, list) and output_results else None
+    first_result_url = first_result.get("url") if isinstance(first_result, dict) else None
+    first_result_video_url = first_result.get("video_url") if isinstance(first_result, dict) else None
+    candidates = (
+        body.get("video_url"),
+        content_url,
+        output_video_url,
+        output_url,
+        first_result_video_url,
+        first_result_url,
+    )
+    return next((str(value).strip() for value in candidates if value), "")

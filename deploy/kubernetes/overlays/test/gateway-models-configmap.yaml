@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openmontage-gateway-models
+  namespace: openmontage-test
+  labels:
+    app.kubernetes.io/name: openmontage
+    app.kubernetes.io/part-of: soulx
+data:
+  # Non-sensitive route overrides only. The built-in registry remains the
+  # source of truth for the 84 approved models and their capabilities.
+  OPENMONTAGE_GATEWAY_MODEL_OVERRIDES: "{}"

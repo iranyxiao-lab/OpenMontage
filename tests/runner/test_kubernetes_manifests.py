@@ -144,6 +144,19 @@ def test_test_overlay_uses_minimal_worker_resources():
     ]
 
 
+def test_test_overlay_injects_non_sensitive_gateway_model_catalog():
+    overlay = ROOT / "overlays" / "test"
+    config = next(doc for doc in docs(overlay / "gateway-models-configmap.yaml") if doc["kind"] == "ConfigMap")
+    assert config["metadata"]["name"] == "openmontage-gateway-models"
+    assert config["metadata"]["namespace"] == "openmontage-test"
+    assert config["data"] == {"OPENMONTAGE_GATEWAY_MODEL_OVERRIDES": "{}"}
+    assert "SECRET" not in config["data"]
+    kustomization = (overlay / "kustomization.yaml").read_text(encoding="utf-8")
+    assert "gateway-models-configmap.yaml" in kustomization
+    assert "configMapRef:\n            name: openmontage-gateway-models" in kustomization
+    assert "OPENMONTAGE_GATEWAY_API_KEY" not in config["data"]
+
+
 def test_cluster_manifest_is_versioned_and_declares_all_stages():
     versions = [path for path in MANIFEST_ROOT.iterdir() if path.is_dir()]
     assert len(versions) == 1
