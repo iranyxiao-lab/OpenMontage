@@ -109,6 +109,49 @@ def test_stage_executor_verifies_checkpoint_receipt_and_task_grant(tmp_path):
         store.authorize(command, "PUT", "other-task/object", 1)
 
 
+def test_inline_run_spec_skips_get_grant_and_writes_user_intent(tmp_path):
+    command = Command.model_validate(fixture("valid-command.json")).model_copy(update={
+        "runSpecRef": Command.model_validate(fixture("valid-command.json")).runSpecRef.model_copy(update={"inline": True}),
+        "userIntent": UserIntent.model_validate({
+            "brief": "Make a concise product launch video",
+            "sources": [{"kind": "prompt"}],
+            "production": {
+                "durationSeconds": 5,
+                "aspectRatio": "16:9",
+                "resolution": "720p",
+                "language": "en-US",
+                "voice": "neutral",
+                "subtitleStyle": "none",
+                "music": "none",
+                "visualStyle": "cinematic",
+                "budgetTier": "economy",
+            },
+        }),
+    })
+    checkpoint_key = f"montage/{command.taskId}/run-{command.runRevision}/checkpoints/{command.stage}.json"
+    store = GrantStore()
+    expires = datetime.now(timezone.utc) + timedelta(minutes=5)
+    for method in ("PUT", "HEAD"):
+        store.add(Grant.model_validate({
+            "schemaVersion": "openmontage.grant.v1",
+            "grantId": f"grant-inline-{method.lower()}",
+            "jobId": command.jobId,
+            "attempt": command.attempt,
+            "runRevision": command.runRevision,
+            "stage": command.stage,
+            "method": method,
+            "expiresAt": expires.isoformat(),
+            "targets": [{"name": "checkpoint", "objectKey": checkpoint_key,
+                          "maxBytes": command.limits.maxOutputBytes, "contentType": "application/json"}],
+        }))
+    config = RunnerConfig(require_grants=True, workspace_root=str(tmp_path))
+    executor = StageExecutor(config, grants=store)
+    execution = executor.execute(command)
+    run_spec = tmp_path / command.jobId / "revision-1" / command.stage / "attempt-1" / "run-spec.json"
+    assert json.loads(run_spec.read_text(encoding="utf-8"))["brief"] == command.userIntent.brief
+    assert execution.checkpoint.objectKey == checkpoint_key
+
+
 def test_oss_get_supports_sdk_v2_stream_body_reader():
     body = b"{}"
 

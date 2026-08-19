@@ -15,6 +15,7 @@ class Ref(StrictModel):
     objectKey: str = Field(min_length=1, max_length=1024)
     sha256: str = Field(pattern=r"^sha256:[a-f0-9]{64}$")
     sizeBytes: int = Field(gt=0, le=8 * 1024**3)
+    inline: bool = False
 
     @field_validator("objectKey")
     @classmethod

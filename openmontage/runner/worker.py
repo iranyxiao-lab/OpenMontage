@@ -159,6 +159,8 @@ class GrantStore:
         checkpoint_key = f"montage/{command.taskId}/run-{command.runRevision}/checkpoints/{command.stage}.json"
         checks = (("GET", command.runSpecRef.objectKey, command.runSpecRef.sizeBytes),
                   ("PUT", checkpoint_key, 1), ("HEAD", checkpoint_key, 1))
+        if command.runSpecRef.inline:
+            checks = checks[1:]
         for method, object_key, size in checks:
             try:
                 self.authorize(command, method, object_key, size)
@@ -225,8 +227,13 @@ class StageExecutor:
         workspace = Path(self.config.workspace_root) / command.jobId / f"revision-{command.runRevision}" / command.stage / f"attempt-{command.attempt}"
         workspace.mkdir(parents=True, exist_ok=True)
         if self.config.require_grants:
-            self.grants.authorize(command, "GET", command.runSpecRef.objectKey, command.runSpecRef.sizeBytes)
-            run_spec = self.object_store.get(command.runSpecRef, max_bytes=command.runSpecRef.sizeBytes)
+            if command.runSpecRef.inline:
+                if command.userIntent is None:
+                    raise ValueError("inline_run_spec_missing")
+                run_spec = _json(command.userIntent.model_dump(mode="json")).encode()
+            else:
+                self.grants.authorize(command, "GET", command.runSpecRef.objectKey, command.runSpecRef.sizeBytes)
+                run_spec = self.object_store.get(command.runSpecRef, max_bytes=command.runSpecRef.sizeBytes)
             (workspace / "run-spec.json").write_bytes(run_spec)
         payload = self.agent.run(command, workspace)
         digest = "sha256:" + hashlib.sha256(payload).hexdigest()
