@@ -7,6 +7,7 @@ import json
 import os
 import re
 import signal
+import shutil
 import sys
 import threading
 import time
@@ -245,7 +246,44 @@ class StageExecutor:
             self.grants.authorize(command, "HEAD", key, checkpoint.sizeBytes)
         if not self.object_store.head(checkpoint):
             raise RuntimeError("checkpoint_receipt_invalid")
-        return StageExecution(checkpoint=checkpoint, artifacts=[])
+        return StageExecution(checkpoint=checkpoint, artifacts=self._publish_artifacts(command, workspace))
+
+    def _publish_artifacts(self, command: Command, workspace: Path) -> list[dict[str, Any]]:
+        """Upload media emitted by the headless publish stage without exposing local paths."""
+        if command.stage != "publish":
+            return []
+        candidates = [
+            path for path in (
+                workspace / "renders" / "final.mp4",
+                workspace / "final.mp4",
+                workspace / "renders" / "final.webm",
+                workspace / "final.webm",
+            ) if path.is_file()
+        ]
+        artifacts: list[dict[str, Any]] = []
+        for path in candidates[:8]:
+            body = path.read_bytes()
+            if not body:
+                continue
+            name = path.name
+            key = f"montage/{command.taskId}/run-{command.runRevision}/artifacts/{name}"
+            digest = "sha256:" + hashlib.sha256(body).hexdigest()
+            content_type = "video/mp4" if path.suffix.lower() == ".mp4" else "video/webm"
+            if self.config.require_grants:
+                self.grants.authorize(command, "PUT", key, len(body))
+            ref = self.object_store.put(key, body, sha256=digest, max_bytes=command.limits.maxOutputBytes)
+            if self.config.require_grants:
+                self.grants.authorize(command, "HEAD", key, ref.sizeBytes)
+            if not self.object_store.head(ref):
+                raise RuntimeError("artifact_receipt_invalid")
+            artifacts.append({
+                "name": name,
+                "objectKey": ref.objectKey,
+                "contentType": content_type,
+                "sizeBytes": ref.sizeBytes,
+                "eTag": ref.sha256,
+            })
+        return artifacts
 
     @staticmethod
     def _build_object_store(config: "RunnerConfig") -> ObjectStoreClient:
@@ -265,9 +303,7 @@ class StageExecutor:
     def cleanup(self, command: Command) -> None:
         root = Path(self.config.workspace_root) / command.jobId / f"revision-{command.runRevision}" / command.stage / f"attempt-{command.attempt}"
         if root.exists():
-            for path in sorted(root.rglob("*"), reverse=True):
-                if path.is_file(): path.unlink(missing_ok=True)
-            root.rmdir()
+            shutil.rmtree(root)
 
 
 def _json(value: Any) -> str:
@@ -418,9 +454,10 @@ class Runner:
 
     def _success(self, command: Command, checkpoint: Ref | None = None, artifacts: list[dict[str, Any]] | None = None, deterministic: bool = False) -> Event:
         now = datetime.now(timezone.utc)
+        event_type = "TaskSucceeded" if command.stage == "publish" else "StageSucceeded"
         return Event(schemaVersion="openmontage.event.v1", eventId=f"event-{uuid.uuid4().hex}",
                      jobId=command.jobId, taskId=command.taskId, runId=command.runId,
-                     attempt=command.attempt, runRevision=command.runRevision, type="StageSucceeded",
+                     attempt=command.attempt, runRevision=command.runRevision, type=event_type,
                      occurredAt=now, workerId=self.config.worker_id, workerPool=self.config.pool,
                      channel=self.config.channel, stage=command.stage, checkpointRef=checkpoint, artifacts=artifacts or None)
 

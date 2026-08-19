@@ -7,7 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from openmontage.runner.contracts import Cancel, Command, Event, Grant, UserIntent
-from openmontage.runner.worker import AlibabaOssObjectStoreClient, GrantStore, PinnedManifestHeadlessAgent, Runner, RunnerConfig, StageExecutor, create_app
+from openmontage.runner.worker import AlibabaOssObjectStoreClient, GrantStore, HeadlessAgent, PinnedManifestHeadlessAgent, Runner, RunnerConfig, StageExecutor, create_app
 
 
 _FIXTURE_ROOTS = (
@@ -107,6 +107,26 @@ def test_stage_executor_verifies_checkpoint_receipt_and_task_grant(tmp_path):
     store.add(grant)
     with pytest.raises(PermissionError):
         store.authorize(command, "PUT", "other-task/object", 1)
+
+
+class _PublishAgent(HeadlessAgent):
+    def run(self, command, workspace):
+        output = workspace / "renders" / "final.mp4"
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(b"preview-video")
+        return b'{"stage":"publish"}'
+
+
+def test_publish_stage_uploads_preview_artifact_and_emits_task_success(tmp_path):
+    command = Command.model_validate(fixture("valid-command.json")).model_copy(update={"stage": "publish"})
+    config = RunnerConfig(workspace_root=str(tmp_path))
+    executor = StageExecutor(config, agent=_PublishAgent())
+    event = Runner(config, executor=executor).handle(command)
+    assert event.type == "TaskSucceeded"
+    assert event.artifacts[0].name == "final.mp4"
+    assert event.artifacts[0].contentType == "video/mp4"
+    assert event.artifacts[0].objectKey.endswith("/artifacts/final.mp4")
+    assert "preview-video" not in event.model_dump_json()
 
 
 def test_inline_run_spec_skips_get_grant_and_writes_user_intent(tmp_path):
