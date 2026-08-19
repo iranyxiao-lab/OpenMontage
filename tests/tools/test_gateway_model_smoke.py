@@ -25,3 +25,16 @@ def test_chat_smoke_uses_translation_options_for_qwen_mt():
         "source_lang": "English",
         "target_lang": "Chinese",
     }
+
+
+def test_chat_smoke_uses_multimodal_content_for_omni_models():
+    captured = {}
+
+    class Client:
+        def model_chat(self, **kwargs):
+            captured.update(kwargs)
+            return {"choices": []}
+
+    result = GatewayModelSmoke(Client())._chat(KNOWN_MODELS["qwen-omni-turbo"])
+    assert result.passed is True
+    assert captured["messages"][0]["content"][0]["type"] == "text"

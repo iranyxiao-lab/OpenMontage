@@ -98,9 +98,15 @@ class GatewayModelSmoke:
             kwargs["max_tokens"] = 10
         if item.model_id == "qvq-max":
             kwargs["stream"] = True
+        content: str | list[dict[str, str]] = "Reply with OK."
+        if "omni" in item.model_id and "realtime" not in item.model_id:
+            content = [{"type": "text", "text": "Reply with OK."}]
+            kwargs.pop("stream", None)
+            kwargs.pop("max_tokens", None)
+            kwargs["max_completion_tokens"] = 10
         self.client.model_chat(
             model=item.model_id,
-            messages=[{"role": "user", "content": "Reply with OK."}],
+            messages=[{"role": "user", "content": content}],
             **kwargs,
         )
         return _passed(item, "response")
