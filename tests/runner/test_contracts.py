@@ -189,6 +189,40 @@ def test_cluster_pipeline_publish_generates_and_verifies_video(tmp_path, monkeyp
     assert "A singer" not in json.dumps(payload)
 
 
+def test_cluster_pipeline_passes_uploaded_image_to_sora(tmp_path, monkeypatch):
+    image = tmp_path / "inputs" / "source-1.png"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(b"png-reference")
+    command = Command.model_validate(fixture("valid-command.json")).model_copy(update={
+        "stage": "publish",
+        "userIntent": UserIntent.model_validate({
+            "brief": "A singer performing on a small stage",
+            "sources": [{"kind": "prompt"}, {"kind": "image", "objectKey": "uploads/ref.png",
+                         "sha256": "sha256:" + "a" * 64, "sizeBytes": 13}],
+            "production": {"durationSeconds": 4, "aspectRatio": "16:9", "resolution": "720p",
+                           "language": "en-US", "voice": "neutral", "subtitleStyle": "none",
+                           "music": "none", "visualStyle": "cinematic", "budgetTier": "economy"},
+        }),
+    })
+    (tmp_path / "inputs" / "manifest.json").write_text(json.dumps([{"kind": "image", "path": str(image)}]))
+    calls = []
+
+    class _Result:
+        success = True
+
+    class _Sora:
+        def execute(self, inputs):
+            calls.append(inputs)
+            Path(inputs["output_path"]).write_bytes(b"video")
+            return _Result()
+
+    monkeypatch.setattr(cluster_pipeline, "SoraVideo", _Sora)
+    monkeypatch.setattr(cluster_pipeline, "_verify_video", lambda path: None)
+    cluster_pipeline.run(command, tmp_path)
+    assert calls[0]["operation"] == "image_to_video"
+    assert calls[0]["input_reference_path"] == str(image)
+
+
 def test_cluster_pipeline_provider_failure_is_sanitized(tmp_path, monkeypatch):
     command = Command.model_validate(fixture("valid-command.json")).model_copy(update={
         "stage": "publish",

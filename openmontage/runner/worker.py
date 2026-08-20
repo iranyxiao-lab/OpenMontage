@@ -166,6 +166,12 @@ class GrantStore:
                   ("PUT", checkpoint_key, 1), ("HEAD", checkpoint_key, 1))
         if command.runSpecRef.inline:
             checks = checks[1:]
+        if command.userIntent is not None:
+            checks = tuple(checks) + tuple(
+                ("GET", source.objectKey, source.sizeBytes)
+                for source in command.userIntent.sources
+                if source.objectKey and source.sizeBytes
+            )
         for method, object_key, size in checks:
             try:
                 self.authorize(command, method, object_key, size)
@@ -240,6 +246,8 @@ class StageExecutor:
                 self.grants.authorize(command, "GET", command.runSpecRef.objectKey, command.runSpecRef.sizeBytes)
                 run_spec = self.object_store.get(command.runSpecRef, max_bytes=command.runSpecRef.sizeBytes)
             (workspace / "run-spec.json").write_bytes(run_spec)
+        if self.config.require_grants:
+            self._materialize_source_media(command, workspace)
         payload = self.agent.run(command, workspace)
         digest = "sha256:" + hashlib.sha256(payload).hexdigest()
         key = f"montage/{command.taskId}/run-{command.runRevision}/checkpoints/{command.stage}.json"
@@ -254,6 +262,30 @@ class StageExecutor:
         if command.stage == "publish" and not artifacts:
             raise RuntimeError("publish_artifact_missing")
         return StageExecution(checkpoint=checkpoint, artifacts=artifacts)
+
+    def _materialize_source_media(self, command: Command, workspace: Path) -> None:
+        """Download declared task media under its stage GET grants.
+
+        Providers receive local files only through the pinned pipeline.  This
+        prevents an OSS locator from being mistaken for a public URL and makes
+        missing grants fail before any paid generation call.
+        """
+        sources = (command.userIntent.sources if command.userIntent is not None else [])
+        media_dir = workspace / "inputs"
+        manifest: list[dict[str, str]] = []
+        for index, source in enumerate(sources):
+            if not source.objectKey:
+                continue
+            self.grants.authorize(command, "GET", source.objectKey, source.sizeBytes or 0)
+            ref = Ref(objectKey=source.objectKey, sha256=source.sha256 or "", sizeBytes=source.sizeBytes or 0)
+            body = self.object_store.get(ref, max_bytes=ref.sizeBytes)
+            media_dir.mkdir(parents=True, exist_ok=True)
+            suffix = Path(source.objectKey).suffix.lower() or ".bin"
+            path = media_dir / f"source-{index}{suffix}"
+            path.write_bytes(body)
+            manifest.append({"kind": source.kind, "path": str(path)})
+        if manifest:
+            (media_dir / "manifest.json").write_text(_json(manifest), encoding="utf-8")
 
     def _publish_artifacts(self, command: Command, workspace: Path) -> list[dict[str, Any]]:
         """Upload media emitted by the headless publish stage without exposing local paths."""
