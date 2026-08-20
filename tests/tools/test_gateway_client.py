@@ -178,6 +178,13 @@ def test_binary_speech_response_is_not_decoded_as_json(monkeypatch):
     ) == b"audio-bytes"
 
 
+def test_openai_gateway_tts_model_is_registered():
+    from tools.gateway_model_catalog import KNOWN_MODELS
+
+    assert KNOWN_MODELS["tts-1"].capability == "tts"
+    assert KNOWN_MODELS["tts-1"].submit_path == "/v1/audio/speech"
+
+
 def test_structured_gateway_error_exposes_only_status_and_code(monkeypatch):
     config = GatewayConfig("http://gateway.example", "secret-key", "sondo")
 
