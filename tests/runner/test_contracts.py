@@ -178,6 +178,12 @@ def test_cluster_pipeline_publish_generates_and_verifies_video(tmp_path, monkeyp
     assert calls[0]["model"] == "sora-2"
     assert calls[0]["seconds"] == "8"
     assert calls[0]["size"] == "1280x720"
+    assert "720p delivery resolution" in calls[0]["prompt"]
+    assert "source modes as inputs where available: prompt" in calls[0]["prompt"]
+    assert "Narration language: en-US" in calls[0]["prompt"]
+    assert "Do not add subtitles" in calls[0]["prompt"]
+    assert "Do not add background music" in calls[0]["prompt"]
+    assert "Budget tier: economy" in calls[0]["prompt"]
     assert (tmp_path / "renders" / "final.mp4").is_file()
     assert payload["result"] == {
         "contentType": "video/mp4",

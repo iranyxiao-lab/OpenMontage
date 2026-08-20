@@ -83,10 +83,26 @@ def run(command: Any, workspace: Path) -> bytes:
 
 def _video_prompt(intent: Any) -> str:
     production = intent.production
+    source_modes = ", ".join(source.kind for source in intent.sources)
+    subtitle_instruction = {
+        "none": "Do not add subtitles or on-screen captions.",
+        "clean": "Add clean, readable subtitles in the requested language.",
+        "karaoke": "Add karaoke-style word-synced subtitles in the requested language.",
+        "highlight": "Add subtitles in the requested language with important words highlighted.",
+    }[production.subtitleStyle]
+    music_instruction = {
+        "none": "Do not add background music.",
+        "auto": "Use a fitting background music bed if the provider supports native audio.",
+        "provided": "Use the provided music source as the background music bed.",
+    }[production.music]
     return (
         f"Create a concise {production.visualStyle} video for this brief: {intent.brief}. "
-        f"Use a {production.aspectRatio} composition. Keep motion coherent and avoid watermarks, "
-        "logos, captions, and on-screen text."
+        f"Use these source modes as inputs where available: {source_modes}. "
+        f"Use a {production.aspectRatio} composition at {production.resolution} delivery resolution "
+        f"with a target duration of {production.durationSeconds} seconds. "
+        f"Narration language: {production.language}; voice direction: {production.voice}. "
+        f"{subtitle_instruction} {music_instruction} "
+        f"Budget tier: {production.budgetTier}. Keep motion coherent and avoid watermarks or logos."
     )
 
 
