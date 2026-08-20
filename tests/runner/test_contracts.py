@@ -1,5 +1,6 @@
 import json
 import sys
+from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -173,7 +174,10 @@ def test_cluster_pipeline_publish_generates_and_verifies_video(tmp_path, monkeyp
             return _Result()
 
     monkeypatch.setattr(cluster_pipeline, "SoraVideo", _Sora)
-    monkeypatch.setattr(cluster_pipeline, "_verify_video", lambda path: None)
+    monkeypatch.setattr(cluster_pipeline, "_apply_production_contract", lambda output, intent, workspace: {
+        "requested": intent.production.model_dump(),
+        "actual": {"durationSeconds": 5.0, "width": 1280, "height": 720, "hasAudio": False},
+    })
     payload = json.loads(cluster_pipeline.run(command, tmp_path).decode("utf-8"))
     assert calls[0]["model"] == "sora-2"
     assert calls[0]["seconds"] == "8"
@@ -191,6 +195,10 @@ def test_cluster_pipeline_publish_generates_and_verifies_video(tmp_path, monkeyp
         "name": "final.mp4",
         "provider": "openai",
         "route": "/v1/videos",
+        "production": {
+            "requested": command.userIntent.production.model_dump(),
+            "actual": {"durationSeconds": 5.0, "width": 1280, "height": 720, "hasAudio": False},
+        },
     }
     assert "A singer" not in json.dumps(payload)
 
@@ -223,7 +231,10 @@ def test_cluster_pipeline_passes_uploaded_image_to_sora(tmp_path, monkeypatch):
             return _Result()
 
     monkeypatch.setattr(cluster_pipeline, "SoraVideo", _Sora)
-    monkeypatch.setattr(cluster_pipeline, "_verify_video", lambda path: None)
+    monkeypatch.setattr(cluster_pipeline, "_apply_production_contract", lambda output, intent, workspace: {
+        "requested": intent.production.model_dump(),
+        "actual": {"durationSeconds": 4.0, "width": 1280, "height": 720, "hasAudio": False},
+    })
     cluster_pipeline.run(command, tmp_path)
     assert calls[0]["operation"] == "image_to_video"
     assert calls[0]["input_reference_path"] == str(image)
@@ -260,6 +271,77 @@ def test_cluster_pipeline_provider_failure_is_sanitized(tmp_path, monkeypatch):
     monkeypatch.setattr(cluster_pipeline, "SoraVideo", _Sora)
     with pytest.raises(RuntimeError, match="^video_generation_failed$"):
         cluster_pipeline.run(command, tmp_path)
+
+
+def test_production_contract_maps_requested_dimensions_and_subtitle_styles(tmp_path):
+    assert cluster_pipeline._target_dimensions("9:16", "1080p") == (1080, 1920)
+    assert cluster_pipeline._target_dimensions("16:9", "720p") == (1280, 720)
+    assert cluster_pipeline._target_dimensions("1:1", "4k") == (2160, 2160)
+
+    words = ["Make", "a", "short", "English", "product", "video"]
+    srt = cluster_pipeline._render_srt(words, 8)
+    assert "00:00:00,000 --> 00:00:08,000" in srt
+    assert "Make a short English product video" in srt
+
+    ass_path = tmp_path / "captions.ass"
+    cluster_pipeline._write_ass(ass_path, words, 8)
+    assert "\\k133" in ass_path.read_text(encoding="utf-8")
+
+
+def test_production_contract_builds_real_normalization_command(tmp_path, monkeypatch):
+    output = tmp_path / "renders" / "final.mp4"
+    output.parent.mkdir(parents=True)
+    output.write_bytes(b"source")
+    narration = tmp_path / "audio" / "narration.mp3"
+    narration.parent.mkdir(parents=True)
+    narration.write_bytes(b"audio")
+    subtitle = tmp_path / "captions.srt"
+    subtitle.write_text("1\n00:00:00,000 --> 00:00:04,000\nhello\n", encoding="utf-8")
+    intent = UserIntent.model_validate({
+        "brief": "hello product",
+        "sources": [{"kind": "prompt"}],
+        "production": {
+            "durationSeconds": 4,
+            "aspectRatio": "9:16",
+            "resolution": "1080p",
+            "language": "en-US",
+            "voice": "female-warm",
+            "subtitleStyle": "clean",
+            "music": "none",
+            "visualStyle": "product",
+            "budgetTier": "economy",
+        },
+    })
+    calls = []
+
+    monkeypatch.setattr(cluster_pipeline.shutil, "which", lambda name: name)
+    probe_calls = []
+
+    def fake_probe(path, ffprobe):
+        probe_calls.append(path)
+        if len(probe_calls) == 1:
+            return {"durationSeconds": 8.0, "width": 1280, "height": 720, "hasAudio": True}
+        return {"durationSeconds": 4.0, "width": 1080, "height": 1920, "hasAudio": True}
+
+    monkeypatch.setattr(cluster_pipeline, "_probe_video", fake_probe)
+    monkeypatch.setattr(cluster_pipeline, "_generate_narration", lambda intent, workspace: narration)
+    monkeypatch.setattr(cluster_pipeline, "_write_subtitle_asset", lambda intent, workspace, duration: subtitle)
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        Path(command[-1]).write_bytes(b"normalized")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(cluster_pipeline.subprocess, "run", fake_run)
+    result = cluster_pipeline._apply_production_contract(output, intent, tmp_path)
+    command = calls[0]
+    assert "scale=1080:1920" in " ".join(command)
+    assert "subtitles='" in " ".join(command)
+    assert "-map" in command and "[narration]" in command
+    assert result["actual"]["width"] == 1080
+    assert result["actual"]["height"] == 1920
+    assert result["actual"]["subtitleEmbedded"] is True
+    assert result["actual"]["narrationVoice"] == "Cherry"
 
 
 def test_heartbeat_event_preserves_attempt_identity():
