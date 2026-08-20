@@ -121,6 +121,8 @@ def _generate_gateway_video(model: str, intent: Any, output: Path, workspace: Pa
     item: GatewayModel = client.resolve_model(model, "video_generation")
     prompt = _video_prompt(intent)
     reference_path = _reference_image(workspace) if workspace else None
+    if reference_path and "image" not in item.input_types:
+        raise GatewayRequestError(f"gateway model does not support image references: {model}")
     if item.protocol == "byteplus-task":
         payload: dict[str, Any] = {
             "model": model,
