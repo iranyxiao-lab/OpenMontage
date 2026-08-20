@@ -250,7 +250,7 @@ def _apply_production_contract(output: Path, intent: Any, workspace: Path) -> di
         {
             "sourceKinds": [source.kind for source in intent.sources],
             "narrationGenerated": narration is not None,
-            "narrationModel": "qwen3-tts-flash" if narration else None,
+            "narrationModel": "tts-1" if narration else None,
             "narrationVoice": _tts_voice(production.voice) if narration else None,
             "subtitleEmbedded": subtitle is not None,
             "musicApplied": production.music,
@@ -313,10 +313,13 @@ def _generate_narration(intent: Any, workspace: Path) -> Path:
     language_type = "English" if language.startswith("en") else "Chinese" if language.startswith("zh") else "Auto"
     try:
         body = GatewayClient().model_speech(
-            model="qwen3-tts-flash",
+            # The test gateway currently exposes Qwen TTS in /v1/models but
+            # its native conversion route is not implemented.  tts-1 is the
+            # verified OpenAI-compatible route and remains gateway-bound.
+            model="tts-1",
             input=intent.brief[:600],
             voice=voice,
-            language_type=language_type,
+            response_format="mp3",
         )
     except GatewayRequestError as exc:
         raise RuntimeError("narration_generation_failed") from exc
@@ -329,7 +332,7 @@ def _generate_narration(intent: Any, workspace: Path) -> Path:
 
 
 def _tts_voice(voice: str) -> str:
-    return {"female-warm": "Cherry", "male-calm": "Ethan", "neutral": "Cherry"}.get(voice, "Cherry")
+    return {"female-warm": "nova", "male-calm": "onyx", "neutral": "alloy"}.get(voice, "alloy")
 
 
 def _resolve_music_source(intent: Any, workspace: Path) -> Path | None:
