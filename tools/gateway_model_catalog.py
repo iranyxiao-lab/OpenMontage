@@ -67,6 +67,7 @@ BAILIAN_VIDEO = (
 BAILIAN_IMAGE_VIDEO = ("wan2.7-image", "wan2.7-image-pro")
 BAILIAN_STT = ("fun-asr",)
 BAILIAN_EMBEDDING = ("text-embedding-v3", "text-embedding-v4")
+OPENAI_TTS = ("tts-1", "tts-1-hd", "gpt-4o-mini-tts")
 
 
 def _entries() -> tuple[GatewayModel, ...]:
@@ -113,6 +114,9 @@ def _entries() -> tuple[GatewayModel, ...]:
                                     None, input_types=("audio",)))
     for model in BAILIAN_EMBEDDING:
         entries.append(GatewayModel(model, "ali", "embedding", "openai-compatible", "/v1/embeddings",
+                                    input_types=("text",)))
+    for model in OPENAI_TTS:
+        entries.append(GatewayModel(model, "openai", "tts", "openai-compatible", "/v1/audio/speech",
                                     input_types=("text",)))
     return tuple(entries)
 
