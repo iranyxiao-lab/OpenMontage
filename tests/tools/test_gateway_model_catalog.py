@@ -15,10 +15,15 @@ from tools.gateway_model_catalog import (
 
 def test_registry_contains_the_four_byteplus_and_eighty_bailian_models():
     catalog = model_catalog()
-    assert len(catalog) == 84
     assert set(BYTEPLUS_CHAT + BYTEPLUS_IMAGE + BYTEPLUS_VIDEO) <= set(catalog)
     assert sum(item.channel == "byteplus-modelark" for item in catalog.values()) == 4
     assert sum(item.channel == "ali" for item in catalog.values()) == 80
+    # The gateway also exposes a small set of OpenAI-compatible TTS models
+    # used by the verified narration route. Keep this compatibility set
+    # explicit while allowing the channel registries to evolve independently.
+    assert {model_id for model_id, item in catalog.items() if item.channel == "openai"} == {
+        "tts-1", "tts-1-hd", "gpt-4o-mini-tts"
+    }
 
 
 def test_visibility_requires_gateway_owner_and_does_not_trust_unknown_models():
