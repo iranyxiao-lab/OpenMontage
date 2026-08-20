@@ -335,6 +335,9 @@ def test_production_contract_builds_real_normalization_command(tmp_path, monkeyp
     monkeypatch.setattr(cluster_pipeline.subprocess, "run", fake_run)
     result = cluster_pipeline._apply_production_contract(output, intent, tmp_path)
     command = calls[0]
+    assert command[command.index("-threads") + 1] == "1"
+    assert command[command.index("-filter_threads") + 1] == "1"
+    assert command[command.index("-preset") + 1] == "ultrafast"
     assert "scale=1080:1920" in " ".join(command)
     assert "subtitles='" in " ".join(command)
     assert "-map" in command and "[narration]" in command

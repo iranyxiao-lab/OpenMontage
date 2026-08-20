@@ -211,7 +211,24 @@ def _apply_production_contract(output: Path, intent: Any, workspace: Path) -> di
         )
         audio_maps = ["[a]"]
 
-    command = [ffmpeg, "-y", *inputs, "-filter_complex", ";".join(filter_parts), "-map", "[v]"]
+    # Worker pods intentionally run at the minimum memory profile. Limit
+    # encoder/filter parallelism so a 1080p portrait render does not get OOM
+    # killed while still producing the requested dimensions.
+    command = [
+        ffmpeg,
+        "-y",
+        "-threads",
+        "1",
+        "-filter_threads",
+        "1",
+        "-filter_complex_threads",
+        "1",
+        *inputs,
+        "-filter_complex",
+        ";".join(filter_parts),
+        "-map",
+        "[v]",
+    ]
     if audio_maps:
         command.extend(["-map", audio_maps[0]])
     else:
@@ -223,7 +240,7 @@ def _apply_production_contract(output: Path, intent: Any, workspace: Path) -> di
             "-c:v",
             "libx264",
             "-preset",
-            "veryfast",
+            "ultrafast",
             "-pix_fmt",
             "yuv420p",
             "-c:a",
