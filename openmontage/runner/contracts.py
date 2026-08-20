@@ -46,6 +46,12 @@ class Trace(StrictModel):
 class Source(StrictModel):
     kind: str = Field(pattern=r"^[a-z][a-z_]{1,31}$")
     locator: str | None = Field(default=None, max_length=2048)
+    # Uploaded task media is addressed by an immutable object reference.  The
+    # locator remains a display/trace hint; workers use these fields for a
+    # grant-scoped OSS GET and never pass oss:// locators to providers.
+    objectKey: str | None = Field(default=None, min_length=1, max_length=1024)
+    sha256: str | None = Field(default=None, pattern=r"^sha256:[a-f0-9]{64}$")
+    sizeBytes: int | None = Field(default=None, gt=0, le=8 * 1024**3)
 
     @field_validator("locator")
     @classmethod
@@ -55,6 +61,18 @@ class Source(StrictModel):
         )):
             raise ValueError("sensitive material is not allowed")
         return value
+
+    @model_validator(mode="after")
+    def validate_object_ref(self) -> "Source":
+        present = (self.objectKey is not None, self.sha256 is not None, self.sizeBytes is not None)
+        if any(present) and not all(present):
+            raise ValueError("source object reference must be complete")
+        if self.objectKey is not None:
+            if self.objectKey.startswith(("/", "\\")) or "://" in self.objectKey or any(
+                part in ("", ".", "..") for part in self.objectKey.split("/")
+            ):
+                raise ValueError("unsafe source object key")
+        return self
 
 
 class ProductionSettings(StrictModel):

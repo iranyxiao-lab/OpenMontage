@@ -46,14 +46,18 @@ def run(command: Any, workspace: Path) -> bytes:
     output = workspace / "renders" / "final.mp4"
     output.parent.mkdir(parents=True, exist_ok=True)
     model = (intent.production.model or os.getenv("OPENMONTAGE_VIDEO_MODEL", "sora-2")).strip() or "sora-2"
+    reference_path = _reference_image(workspace)
     if model in {"sora-2", "sora-2-pro"}:
-        result = SoraVideo().execute({
+        video_inputs: dict[str, Any] = {
             "prompt": _video_prompt(intent),
             "model": model,
             "size": _video_size(intent.production.aspectRatio),
             "seconds": _video_seconds(intent.production.durationSeconds),
             "output_path": str(output),
-        })
+        }
+        if reference_path:
+            video_inputs.update({"operation": "image_to_video", "input_reference_path": reference_path})
+        result = SoraVideo().execute(video_inputs)
         if not result.success:
             raise RuntimeError("video_generation_failed")
         provider = "openai"
@@ -62,7 +66,7 @@ def run(command: Any, workspace: Path) -> bytes:
         if not gateway_configured():
             raise RuntimeError("gateway_configuration_missing")
         try:
-            provider, route = _generate_gateway_video(model, intent, output)
+            provider, route = _generate_gateway_video(model, intent, output, workspace)
         except GatewayRequestError as exc:
             raise RuntimeError("gateway_video_generation_failed") from exc
 
@@ -86,6 +90,20 @@ def _video_prompt(intent: Any) -> str:
     )
 
 
+def _reference_image(workspace: Path) -> str | None:
+    manifest = workspace / "inputs" / "manifest.json"
+    if not manifest.is_file():
+        return None
+    try:
+        entries = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    for entry in entries if isinstance(entries, list) else []:
+        if isinstance(entry, dict) and entry.get("kind") == "image" and Path(str(entry.get("path", ""))).is_file():
+            return str(entry["path"])
+    return None
+
+
 def _video_size(aspect_ratio: str) -> str:
     return "720x1280" if aspect_ratio == "9:16" else "1280x720"
 
@@ -98,10 +116,11 @@ def _video_seconds(duration_seconds: int) -> str:
     return "12"
 
 
-def _generate_gateway_video(model: str, intent: Any, output: Path) -> tuple[str, str]:
+def _generate_gateway_video(model: str, intent: Any, output: Path, workspace: Path | None = None) -> tuple[str, str]:
     client = GatewayClient()
     item: GatewayModel = client.resolve_model(model, "video_generation")
     prompt = _video_prompt(intent)
+    reference_path = _reference_image(workspace) if workspace else None
     if item.protocol == "byteplus-task":
         payload: dict[str, Any] = {
             "model": model,
@@ -111,6 +130,8 @@ def _generate_gateway_video(model: str, intent: Any, output: Path) -> tuple[str,
             "generate_audio": True,
             "watermark": False,
         }
+        if reference_path:
+            payload["content"].append({"type": "image_url", "image_url": {"url": _data_uri(reference_path)}})
     else:
         payload = {
             "model": model,
@@ -122,6 +143,8 @@ def _generate_gateway_video(model: str, intent: Any, output: Path) -> tuple[str,
                 "audio": True,
             },
         }
+        if reference_path:
+            payload["input"]["media"] = [{"type": "first_frame", "url": _data_uri(reference_path)}]
     submitted = client.submit_task(model=model, capability="video_generation", payload=payload)
     output_body = submitted.get("output")
     output_task_id = output_body.get("task_id") if isinstance(output_body, dict) else None
@@ -137,6 +160,13 @@ def _generate_gateway_video(model: str, intent: Any, output: Path) -> tuple[str,
     output.parent.mkdir(parents=True, exist_ok=True)
     client.download_task_result(terminal, str(output))
     return item.channel, item.submit_path
+
+
+def _data_uri(path: str) -> str:
+    import base64
+    import mimetypes
+    mime = mimetypes.guess_type(path)[0] or "image/png"
+    return f"data:{mime};base64,{base64.b64encode(Path(path).read_bytes()).decode('ascii')}"
 
 
 def _verify_video(path: Path) -> None:
