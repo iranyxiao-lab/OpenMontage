@@ -83,7 +83,9 @@ class ProductionSettings(StrictModel):
     voice: str = Field(pattern=r"^[a-z0-9-]{1,64}$")
     subtitleStyle: str = Field(pattern=r"^(none|clean|karaoke|highlight)$")
     music: str = Field(pattern=r"^(none|auto|provided)$")
-    visualStyle: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$")
+    # This is localized, user-authored creative direction. Allow Unicode text
+    # while rejecting control characters and leading/trailing whitespace.
+    visualStyle: str = Field(min_length=1, max_length=64)
     budgetTier: str = Field(pattern=r"^(economy|balanced|premium)$")
     model: str | None = Field(
         default=None,
@@ -91,6 +93,13 @@ class ProductionSettings(StrictModel):
         max_length=128,
         pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
     )
+
+    @field_validator("visualStyle")
+    @classmethod
+    def safe_visual_style(cls, value: str) -> str:
+        if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
+            raise ValueError("visual style contains control characters")
+        return value
 
 
 class UserIntent(StrictModel):
