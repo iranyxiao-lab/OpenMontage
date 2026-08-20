@@ -341,7 +341,7 @@ def test_production_contract_builds_real_normalization_command(tmp_path, monkeyp
     assert result["actual"]["width"] == 1080
     assert result["actual"]["height"] == 1920
     assert result["actual"]["subtitleEmbedded"] is True
-    assert result["actual"]["narrationVoice"] == "Cherry"
+    assert result["actual"]["narrationVoice"] == "nova"
 
 
 def test_heartbeat_event_preserves_attempt_identity():
