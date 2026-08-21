@@ -195,12 +195,100 @@ def test_cluster_pipeline_publish_generates_and_verifies_video(tmp_path, monkeyp
         "name": "final.mp4",
         "provider": "openai",
         "route": "/v1/videos",
+        "scenePlan": [{
+            "index": 1,
+            "startSeconds": 0,
+            "endSeconds": 5,
+            "durationSeconds": 5,
+            "generationDurationSeconds": 8,
+            "role": "hook",
+            "count": 1,
+        }],
         "production": {
             "requested": command.userIntent.production.model_dump(),
             "actual": {"durationSeconds": 5.0, "width": 1280, "height": 720, "hasAudio": False},
         },
     }
     assert "A singer" not in json.dumps(payload)
+
+
+def test_long_form_publish_generates_distinct_scenes_and_stitches_timeline(tmp_path, monkeypatch):
+    command = Command.model_validate(fixture("valid-command.json")).model_copy(update={
+        "stage": "publish",
+        "userIntent": UserIntent.model_validate({
+            "brief": "A cinematic launch story",
+            "sources": [{"kind": "prompt"}],
+            "production": {
+                "durationSeconds": 45,
+                "aspectRatio": "9:16",
+                "resolution": "720p",
+                "language": "ja-JP",
+                "voice": "female-warm",
+                "subtitleStyle": "clean",
+                "music": "auto",
+                "visualStyle": "cinematic",
+                "budgetTier": "premium",
+            },
+        }),
+    })
+    calls = []
+    stitched = []
+
+    class _Result:
+        success = True
+
+    class _Sora:
+        def execute(self, inputs):
+            calls.append(inputs)
+            Path(inputs["output_path"]).write_bytes(b"scene")
+            return _Result()
+
+    def fake_stitch(paths, output):
+        stitched.append(paths)
+        output.write_bytes(b"stitched")
+
+    monkeypatch.setattr(cluster_pipeline, "SoraVideo", _Sora)
+    monkeypatch.setattr(cluster_pipeline, "_concatenate_scenes", fake_stitch)
+    monkeypatch.setattr(cluster_pipeline, "_apply_production_contract", lambda output, intent, workspace: {
+        "requested": intent.production.model_dump(),
+        "actual": {"durationSeconds": 45.0, "width": 720, "height": 1280, "hasAudio": True},
+    })
+
+    payload = json.loads(cluster_pipeline.run(command, tmp_path))
+    assert [scene["durationSeconds"] for scene in payload["result"]["scenePlan"]] == [12, 12, 12, 9]
+    assert [call["seconds"] for call in calls] == ["12", "12", "12", "12"]
+    assert len({call["prompt"] for call in calls}) == 4
+    assert "Narrative role: hook" in calls[0]["prompt"]
+    assert "Narrative role: close" in calls[-1]["prompt"]
+    assert len(stitched[0]) == 4
+    assert (tmp_path / "renders" / "final.mp4").read_bytes() == b"stitched"
+
+
+def test_long_form_stage_checkpoint_contains_scene_timeline(tmp_path):
+    command = Command.model_validate(fixture("valid-command.json")).model_copy(update={
+        "stage": "scene_plan",
+        "userIntent": UserIntent.model_validate({
+            "brief": "A long story",
+            "sources": [{"kind": "prompt"}],
+            "production": {
+                "durationSeconds": 25,
+                "aspectRatio": "16:9",
+                "resolution": "720p",
+                "language": "en-US",
+                "voice": "neutral",
+                "subtitleStyle": "none",
+                "music": "none",
+                "visualStyle": "cinematic",
+                "budgetTier": "balanced",
+            },
+        }),
+    })
+    payload = json.loads(cluster_pipeline.run(command, tmp_path))
+    assert payload["result"]["mode"] == "multi_scene"
+    assert payload["result"]["sceneCount"] == 3
+    assert [(scene["startSeconds"], scene["endSeconds"]) for scene in payload["result"]["scenes"]] == [
+        (0, 12), (12, 24), (24, 25)
+    ]
 
 
 def test_cluster_pipeline_passes_uploaded_image_to_sora(tmp_path, monkeypatch):
