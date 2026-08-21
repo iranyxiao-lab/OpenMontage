@@ -198,8 +198,8 @@ class SoraVideo(BaseTool):
             # upload; a JSON data URI is not accepted by the gateway route.
             payload["input_reference"] = prepared_reference
 
-        client = openai_client()
         try:
+            client = openai_client()
             video = client.videos.create_and_poll(**payload)
             video_id = self._get_video_id(video)
             if not video_id:
