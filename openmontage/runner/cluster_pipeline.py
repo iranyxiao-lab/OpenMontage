@@ -160,6 +160,7 @@ def _apply_production_contract(output: Path, intent: Any, workspace: Path) -> di
     )
     target_duration = float(production.durationSeconds)
     source_probe = _probe_video(output, ffprobe)
+    source_is_short = source_probe["durationSeconds"] + 0.05 < target_duration
     narration = _generate_narration(intent, workspace)
     music = _resolve_music_source(intent, workspace)
     subtitle = _write_subtitle_asset(intent, workspace, target_duration)
@@ -167,13 +168,15 @@ def _apply_production_contract(output: Path, intent: Any, workspace: Path) -> di
     video_filter = (
         f"scale={target_width}:{target_height}:force_original_aspect_ratio=increase,"
         f"crop={target_width}:{target_height},"
-        f"tpad=stop_mode=clone:stop_duration={target_duration},"
         f"trim=duration={target_duration},setpts=PTS-STARTPTS"
     )
     if subtitle:
         video_filter = f"{video_filter},{_subtitle_filter(subtitle)}"
 
-    inputs = ["-i", str(output)]
+    # Provider clips are often shorter than the requested delivery duration.
+    # Loop the source in that case; padding with tpad would freeze the last
+    # frame for the rest of the output.
+    inputs = (["-stream_loop", "-1"] if source_is_short else []) + ["-i", str(output)]
     filter_parts = [f"[0:v]{video_filter}[v]"]
     audio_maps: list[str] = []
     if narration:

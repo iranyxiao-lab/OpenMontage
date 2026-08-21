@@ -347,6 +347,51 @@ def test_production_contract_builds_real_normalization_command(tmp_path, monkeyp
     assert result["actual"]["narrationVoice"] == "nova"
 
 
+def test_production_contract_loops_short_source_instead_of_freezing_last_frame(tmp_path, monkeypatch):
+    output = tmp_path / "renders" / "final.mp4"
+    output.parent.mkdir(parents=True)
+    output.write_bytes(b"source")
+    intent = UserIntent.model_validate({
+        "brief": "long product video",
+        "sources": [{"kind": "prompt"}],
+        "production": {
+            "durationSeconds": 45,
+            "aspectRatio": "9:16",
+            "resolution": "720p",
+            "language": "ja-JP",
+            "voice": "female-warm",
+            "subtitleStyle": "clean",
+            "music": "none",
+            "visualStyle": "cinematic",
+            "budgetTier": "premium",
+        },
+    })
+    calls = []
+    monkeypatch.setattr(cluster_pipeline.shutil, "which", lambda name: name)
+    probe_calls = []
+
+    def fake_probe(path, ffprobe):
+        probe_calls.append(path)
+        if len(probe_calls) == 1:
+            return {"durationSeconds": 11.0, "width": 720, "height": 1280, "hasAudio": False}
+        return {"durationSeconds": 45.0, "width": 720, "height": 1280, "hasAudio": False}
+
+    monkeypatch.setattr(cluster_pipeline, "_probe_video", fake_probe)
+    monkeypatch.setattr(cluster_pipeline, "_generate_narration", lambda intent, workspace: None)
+    monkeypatch.setattr(cluster_pipeline, "_write_subtitle_asset", lambda intent, workspace, duration: None)
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        Path(command[-1]).write_bytes(b"normalized")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(cluster_pipeline.subprocess, "run", fake_run)
+    cluster_pipeline._apply_production_contract(output, intent, tmp_path)
+    command = calls[0]
+    assert command[command.index("-stream_loop") + 1] == "-1"
+    assert "tpad=stop_mode=clone" not in " ".join(command)
+
+
 def test_heartbeat_event_preserves_attempt_identity():
     command = Command.model_validate(fixture("valid-command.json"))
     runner = Runner(RunnerConfig(channel="stable", pool="openmontage-planner"))
