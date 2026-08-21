@@ -39,6 +39,8 @@ def run(command: Any, workspace: Path) -> bytes:
         "runRevision": command.runRevision,
     }
     if command.stage != "publish":
+        if command.userIntent is not None and command.stage in {"scene_plan", "assets", "edit", "compose"}:
+            checkpoint["result"] = _long_form_stage_result(command.userIntent, command.stage)
         return _encode(checkpoint)
 
     intent = command.userIntent
@@ -51,25 +53,16 @@ def run(command: Any, workspace: Path) -> bytes:
     reference_path = _reference_image(workspace)
     if model in {"sora-2", "sora-2-pro"}:
         _enforce_budget_policy(intent, model)
-        video_inputs: dict[str, Any] = {
-            "prompt": _video_prompt(intent),
-            "model": model,
-            "size": _video_size(intent.production.aspectRatio),
-            "seconds": _video_seconds(intent.production.durationSeconds),
-            "output_path": str(output),
-        }
-        if reference_path:
-            video_inputs.update({"operation": "image_to_video", "input_reference_path": reference_path})
-        result = SoraVideo().execute(video_inputs)
-        if not result.success:
-            raise RuntimeError("video_generation_failed")
+        scene_plan = _build_scene_plan(intent.production.durationSeconds, 12)
+        _generate_sora_scenes(model, intent, scene_plan, output, reference_path)
         provider = "openai"
         route = "/v1/videos"
     else:
         if not gateway_configured():
             raise RuntimeError("gateway_configuration_missing")
+        scene_plan = _build_scene_plan(intent.production.durationSeconds, 10)
         try:
-            provider, route = _generate_gateway_video(model, intent, output, workspace)
+            provider, route = _generate_gateway_scenes(model, intent, scene_plan, output, workspace)
         except GatewayRequestError as exc:
             raise RuntimeError("gateway_video_generation_failed") from exc
 
@@ -80,12 +73,13 @@ def run(command: Any, workspace: Path) -> bytes:
         "provider": provider,
         "model": model,
         "route": route,
+        "scenePlan": scene_plan,
         "production": actual,
     }
     return _encode(checkpoint)
 
 
-def _video_prompt(intent: Any) -> str:
+def _video_prompt(intent: Any, scene: dict[str, Any] | None = None) -> str:
     production = intent.production
     source_modes = ", ".join(source.kind for source in intent.sources)
     subtitle_instruction = {
@@ -99,15 +93,112 @@ def _video_prompt(intent: Any) -> str:
         "auto": "Use a fitting background music bed if the provider supports native audio.",
         "provided": "Use the provided music source as the background music bed.",
     }[production.music]
+    scene_instruction = ""
+    target_duration = production.durationSeconds
+    if scene is not None:
+        target_duration = scene["generationDurationSeconds"]
+        scene_instruction = (
+            f"This is scene {scene['index']} of {scene['count']} in a {production.durationSeconds}-second sequence. "
+            f"Narrative role: {scene['role']}. Make this segment visually distinct while preserving continuity. "
+        )
     return (
         f"Create a concise {production.visualStyle} video for this brief: {intent.brief}. "
+        f"{scene_instruction}"
         f"Use these source modes as inputs where available: {source_modes}. "
         f"Use a {production.aspectRatio} composition at {production.resolution} delivery resolution "
-        f"with a target duration of {production.durationSeconds} seconds. "
+        f"with a target duration of {target_duration} seconds. "
         f"Narration language: {production.language}; voice direction: {production.voice}. "
         f"{subtitle_instruction} {music_instruction} "
         f"Budget tier: {production.budgetTier}. Keep motion coherent and avoid watermarks or logos."
     )
+
+
+def _build_scene_plan(duration_seconds: int, max_scene_seconds: int) -> list[dict[str, Any]]:
+    remaining = duration_seconds
+    start = 0
+    scenes: list[dict[str, Any]] = []
+    while remaining > 0:
+        planned = min(max_scene_seconds, remaining)
+        scenes.append({
+            "index": len(scenes) + 1,
+            "startSeconds": start,
+            "endSeconds": start + planned,
+            "durationSeconds": planned,
+            "generationDurationSeconds": _provider_duration(planned, max_scene_seconds),
+            "role": "pending",
+        })
+        start += planned
+        remaining -= planned
+    count = len(scenes)
+    for scene in scenes:
+        scene["count"] = count
+        scene["role"] = _scene_role(scene["index"], count)
+    return scenes
+
+
+def _scene_role(index: int, count: int) -> str:
+    if index == 1:
+        return "hook"
+    if index == count:
+        return "close"
+    middle_roles = ("context", "development", "proof", "payoff")
+    return middle_roles[min(index - 2, len(middle_roles) - 1)]
+
+
+def _provider_duration(duration_seconds: int, max_scene_seconds: int) -> int:
+    if max_scene_seconds == 12:
+        return int(_video_seconds(duration_seconds))
+    return min(max_scene_seconds, max(1, duration_seconds))
+
+
+def _long_form_stage_result(intent: Any, stage: str) -> dict[str, Any]:
+    plan = _build_scene_plan(intent.production.durationSeconds, 12)
+    return {
+        "mode": "multi_scene" if len(plan) > 1 else "single_scene",
+        "stage": stage,
+        "requestedDurationSeconds": intent.production.durationSeconds,
+        "sceneCount": len(plan),
+        "scenes": plan,
+    }
+
+
+def _generate_sora_scenes(model: str, intent: Any, scene_plan: list[dict[str, Any]],
+                          output: Path, reference_path: str | None) -> None:
+    scene_dir = output.parent / "scenes"
+    scene_dir.mkdir(parents=True, exist_ok=True)
+    scene_paths: list[Path] = []
+    for scene in scene_plan:
+        scene_output = output if len(scene_plan) == 1 else scene_dir / f"scene-{scene['index']:03d}.mp4"
+        video_inputs: dict[str, Any] = {
+            "prompt": _video_prompt(intent, scene),
+            "model": model,
+            "size": _video_size(intent.production.aspectRatio),
+            "seconds": str(scene["generationDurationSeconds"]),
+            "output_path": str(scene_output),
+        }
+        if reference_path:
+            video_inputs.update({"operation": "image_to_video", "input_reference_path": reference_path})
+        result = SoraVideo().execute(video_inputs)
+        if not result.success:
+            raise RuntimeError("video_generation_failed")
+        scene_paths.append(scene_output)
+    if len(scene_paths) > 1:
+        _concatenate_scenes(scene_paths, output)
+
+
+def _concatenate_scenes(scene_paths: list[Path], output: Path) -> None:
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise RuntimeError("scene_stitcher_unavailable")
+    manifest = scene_paths[0].parent / "concat.txt"
+    manifest.write_text("".join(f"file '{path.name}'\n" for path in scene_paths), encoding="utf-8")
+    completed = subprocess.run(
+        [ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i", manifest.name,
+         "-c", "copy", "-movflags", "+faststart", str(output)],
+        cwd=manifest.parent, check=False, capture_output=True, text=True, timeout=900,
+    )
+    if completed.returncode != 0 or not output.is_file() or output.stat().st_size <= 0:
+        raise RuntimeError("scene_stitch_failed")
 
 
 def _reference_image(workspace: Path) -> str | None:
@@ -436,10 +527,29 @@ def _subtitle_filter(path: Path) -> str:
     return f"{'ass' if suffix == '.ass' else 'subtitles'}='{escaped}'"
 
 
-def _generate_gateway_video(model: str, intent: Any, output: Path, workspace: Path | None = None) -> tuple[str, str]:
+def _generate_gateway_scenes(model: str, intent: Any, scene_plan: list[dict[str, Any]],
+                             output: Path, workspace: Path | None = None) -> tuple[str, str]:
+    scene_dir = output.parent / "scenes"
+    scene_dir.mkdir(parents=True, exist_ok=True)
+    scene_paths: list[Path] = []
+    provider = route = ""
+    for scene in scene_plan:
+        scene_output = output if len(scene_plan) == 1 else scene_dir / f"scene-{scene['index']:03d}.mp4"
+        provider, route = _generate_gateway_video(
+            model, intent, scene_output, workspace, scene=scene,
+        )
+        scene_paths.append(scene_output)
+    if len(scene_paths) > 1:
+        _concatenate_scenes(scene_paths, output)
+    return provider, route
+
+
+def _generate_gateway_video(model: str, intent: Any, output: Path, workspace: Path | None = None,
+                            scene: dict[str, Any] | None = None) -> tuple[str, str]:
     client = GatewayClient()
     item: GatewayModel = client.resolve_model(model, "video_generation")
-    prompt = _video_prompt(intent)
+    prompt = _video_prompt(intent, scene)
+    duration = scene["generationDurationSeconds"] if scene else min(intent.production.durationSeconds, 10)
     reference_path = _reference_image(workspace) if workspace else None
     if reference_path and "image" not in item.input_types:
         raise GatewayRequestError(f"gateway model does not support image references: {model}")
@@ -448,7 +558,7 @@ def _generate_gateway_video(model: str, intent: Any, output: Path, workspace: Pa
             "model": model,
             "content": [{"type": "text", "text": prompt}],
             "ratio": intent.production.aspectRatio,
-            "duration": min(intent.production.durationSeconds, 12),
+            "duration": duration,
             "generate_audio": True,
             "watermark": False,
         }
@@ -459,7 +569,7 @@ def _generate_gateway_video(model: str, intent: Any, output: Path, workspace: Pa
             "model": model,
             "input": {"prompt": prompt},
             "parameters": {
-                "duration": min(intent.production.durationSeconds, 10),
+                "duration": duration,
                 "resolution": intent.production.resolution.upper(),
                 "watermark": False,
                 "audio": True,
