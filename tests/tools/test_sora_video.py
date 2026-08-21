@@ -121,3 +121,52 @@ def test_sora_video_executes_with_current_create_and_poll_sdk_surface(monkeypatc
     assert calls["payload"]["model"] == "sora-2"
     assert calls["payload"]["seconds"] == "4"
     assert calls["download"] == ("video_test", "video")
+
+
+def test_sora_video_uses_multipart_reference_file(monkeypatch, tmp_path):
+    from tools.video.sora_video import SoraVideo
+
+    calls = {}
+
+    class FakeContent:
+        def write_to_file(self, path):
+            Path(path).write_bytes(b"fake mp4")
+
+    class FakeVideo:
+        id = "video_reference"
+        status = "completed"
+
+    class FakeVideos:
+        def create_and_poll(self, **payload):
+            calls["payload"] = payload
+            return FakeVideo()
+
+        def download_content(self, video_id, variant):
+            return FakeContent()
+
+    class FakeOpenAI:
+        def __init__(self):
+            self.videos = FakeVideos()
+
+    fake_openai = types.ModuleType("openai")
+    fake_openai.__version__ = "2.44.0"
+    fake_openai.OpenAI = FakeOpenAI
+    monkeypatch.setitem(sys.modules, "openai", fake_openai)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+
+    reference = tmp_path / "reference.jpg"
+    reference.write_bytes(b"image")
+    output_path = tmp_path / "reference.mp4"
+    result = SoraVideo().execute({
+        "prompt": "Animate this reference",
+        "model": "sora-2",
+        "size": "1280x720",
+        "seconds": "4",
+        "operation": "image_to_video",
+        "input_reference_path": str(reference),
+        "output_path": str(output_path),
+    })
+
+    assert result.success, result.error
+    assert calls["payload"]["input_reference"] == reference
+    assert not isinstance(calls["payload"]["input_reference"], dict)

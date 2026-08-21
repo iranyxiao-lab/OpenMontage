@@ -187,7 +187,10 @@ class SoraVideo(BaseTool):
             reference = Path(str(reference_path))
             if not reference.exists():
                 return ToolResult(success=False, error=f"Input reference not found: {reference}")
-            payload["input_reference"] = {"image_url": self._file_to_data_uri(reference)}
+            # The OpenAI-compatible video endpoint expects this field as a
+            # multipart file. Passing a Path lets the SDK construct the
+            # upload; a JSON data URI is not accepted by the gateway route.
+            payload["input_reference"] = reference
 
         client = openai_client()
         try:
