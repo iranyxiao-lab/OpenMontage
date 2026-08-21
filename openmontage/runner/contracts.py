@@ -101,11 +101,18 @@ class ProductionSettings(StrictModel):
             raise ValueError("visual style contains control characters")
         return value
 
-
 class UserIntent(StrictModel):
     brief: str = Field(min_length=1, max_length=4000)
+    narrationText: str | None = Field(default=None, max_length=4000)
     sources: list[Source] = Field(min_length=1, max_length=16)
     production: ProductionSettings
+
+    @field_validator("narrationText")
+    @classmethod
+    def safe_narration_text(cls, value: str | None) -> str | None:
+        if value is not None and any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
+            raise ValueError("narration text contains control characters")
+        return value
 
 
 class Command(StrictModel):

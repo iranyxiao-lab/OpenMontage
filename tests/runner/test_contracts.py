@@ -69,6 +69,95 @@ def test_user_intent_accepts_public_reference_and_rejects_sensitive_locator():
         ]})
 
 
+def test_narration_text_is_optional_and_rejects_control_characters():
+    base = {
+        "brief": "Describe the product visually",
+        "sources": [{"kind": "prompt"}],
+        "production": {
+            "durationSeconds": 10,
+            "aspectRatio": "16:9",
+            "resolution": "720p",
+            "language": "zh-CN",
+            "voice": "neutral",
+            "subtitleStyle": "none",
+            "music": "none",
+            "visualStyle": "clean product",
+            "budgetTier": "economy",
+        },
+    }
+    assert UserIntent.model_validate(base).narrationText is None
+    with pytest.raises(ValidationError):
+        UserIntent.model_validate({**base, "narrationText": "hello\nworld"})
+
+
+def test_generate_narration_uses_separate_narration_text(tmp_path, monkeypatch):
+    intent = UserIntent.model_validate({
+        "brief": "VISUAL BRIEF MUST NOT BE SPOKEN",
+        "sources": [{"kind": "prompt"}],
+        "production": {
+            "durationSeconds": 10,
+            "aspectRatio": "16:9",
+            "resolution": "720p",
+            "language": "en-US",
+            "voice": "neutral",
+            "subtitleStyle": "none",
+            "music": "none",
+            "visualStyle": "cinematic",
+            "budgetTier": "economy",
+        },
+        "narrationText": "Speak this separate narration only.",
+    })
+    calls = []
+
+    class FakeGateway:
+        def model_speech(self, **kwargs):
+            calls.append(kwargs)
+            return b"audio"
+
+    monkeypatch.setattr(cluster_pipeline, "gateway_configured", lambda: True)
+    monkeypatch.setattr(cluster_pipeline, "GatewayClient", FakeGateway)
+    path = cluster_pipeline._generate_narration(intent, tmp_path)
+    assert path.read_bytes() == b"audio"
+    assert calls[0]["input"] == "Speak this separate narration only."
+
+
+def test_generate_narration_is_not_called_without_narration_text(tmp_path, monkeypatch):
+    intent = UserIntent.model_validate({
+        "brief": "VISUAL BRIEF",
+        "sources": [{"kind": "prompt"}],
+        "production": {
+            "durationSeconds": 10,
+            "aspectRatio": "16:9",
+            "resolution": "720p",
+            "language": "en-US",
+            "voice": "neutral",
+            "subtitleStyle": "none",
+            "music": "none",
+            "visualStyle": "cinematic",
+            "budgetTier": "economy",
+        },
+    })
+    output = tmp_path / "renders" / "final.mp4"
+    output.parent.mkdir(parents=True)
+    output.write_bytes(b"source")
+    monkeypatch.setattr(cluster_pipeline, "_generate_narration", lambda *_: pytest.fail("TTS should be skipped"))
+    monkeypatch.setattr(cluster_pipeline.shutil, "which", lambda name: name)
+    monkeypatch.setattr(cluster_pipeline, "_probe_video", lambda *_: {"durationSeconds": 10.0, "width": 1280, "height": 720, "hasAudio": False})
+    monkeypatch.setattr(cluster_pipeline, "_write_subtitle_asset", lambda *_: None)
+
+    def _fake_normalize_run(command):
+        Path(command[-1]).write_bytes(b"normalized")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(
+        cluster_pipeline.subprocess,
+        "run",
+        lambda command, **kwargs: _fake_normalize_run(command),
+    )
+    result = cluster_pipeline._apply_production_contract(output, intent, tmp_path)
+    assert result["actual"]["narrationGenerated"] is False
+
+
 def test_runner_identity_is_idempotent_and_pool_is_frozen():
     command = Command.model_validate(fixture("valid-command.json"))
     runner = Runner(RunnerConfig(channel="stable", pool="openmontage-planner", namespace="openmontage-test"))
@@ -394,11 +483,12 @@ def test_production_contract_builds_real_normalization_command(tmp_path, monkeyp
             "resolution": "1080p",
             "language": "en-US",
             "voice": "female-warm",
-            "subtitleStyle": "clean",
+                "subtitleStyle": "clean",
             "music": "none",
             "visualStyle": "product",
             "budgetTier": "economy",
         },
+        "narrationText": "hello product narration",
     })
     calls = []
 
