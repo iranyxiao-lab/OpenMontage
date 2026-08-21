@@ -124,6 +124,7 @@ def test_sora_video_executes_with_current_create_and_poll_sdk_surface(monkeypatc
 
 
 def test_sora_video_uses_multipart_reference_file(monkeypatch, tmp_path):
+    from PIL import Image
     from tools.video.sora_video import SoraVideo
 
     calls = {}
@@ -155,7 +156,7 @@ def test_sora_video_uses_multipart_reference_file(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
 
     reference = tmp_path / "reference.jpg"
-    reference.write_bytes(b"image")
+    Image.new("RGB", (1280, 720), "blue").save(reference)
     output_path = tmp_path / "reference.mp4"
     result = SoraVideo().execute({
         "prompt": "Animate this reference",
@@ -168,5 +169,56 @@ def test_sora_video_uses_multipart_reference_file(monkeypatch, tmp_path):
     })
 
     assert result.success, result.error
-    assert calls["payload"]["input_reference"] == reference
+    assert calls["payload"]["input_reference"] != reference
     assert not isinstance(calls["payload"]["input_reference"], dict)
+
+
+def test_sora_video_normalizes_reference_dimensions(monkeypatch, tmp_path):
+    from PIL import Image
+    from tools.video.sora_video import SoraVideo
+
+    calls = {}
+
+    class FakeContent:
+        def write_to_file(self, path):
+            Path(path).write_bytes(b"fake mp4")
+
+    class FakeVideo:
+        id = "video_dimensions"
+        status = "completed"
+
+    class FakeVideos:
+        def create_and_poll(self, **payload):
+            calls["payload"] = payload
+            with Image.open(payload["input_reference"]) as image:
+                calls["reference_size"] = image.size
+            return FakeVideo()
+
+        def download_content(self, video_id, variant):
+            return FakeContent()
+
+    class FakeOpenAI:
+        def __init__(self):
+            self.videos = FakeVideos()
+
+    fake_openai = types.ModuleType("openai")
+    fake_openai.__version__ = "2.44.0"
+    fake_openai.OpenAI = FakeOpenAI
+    monkeypatch.setitem(sys.modules, "openai", fake_openai)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+
+    reference = tmp_path / "wide-reference.jpg"
+    Image.new("RGB", (400, 200), "red").save(reference)
+    result = SoraVideo().execute({
+        "prompt": "Animate this reference",
+        "model": "sora-2",
+        "size": "1280x720",
+        "seconds": "4",
+        "operation": "image_to_video",
+        "input_reference_path": str(reference),
+        "output_path": str(tmp_path / "dimensions.mp4"),
+    })
+
+    assert result.success, result.error
+    assert calls["reference_size"] == (1280, 720)
+    assert not Path(calls["payload"]["input_reference"]).exists()

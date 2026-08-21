@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import mimetypes
 import os
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -181,16 +182,21 @@ class SoraVideo(BaseTool):
         }
 
         reference_path = inputs.get("input_reference_path") or inputs.get("reference_image_path")
+        prepared_reference: Path | None = None
         if inputs.get("operation") == "image_to_video" or reference_path:
             if not reference_path:
                 return ToolResult(success=False, error="image_to_video requires input_reference_path")
             reference = Path(str(reference_path))
             if not reference.exists():
                 return ToolResult(success=False, error=f"Input reference not found: {reference}")
+            try:
+                prepared_reference = self._prepare_reference(reference, size)
+            except (OSError, ValueError) as exc:
+                return ToolResult(success=False, error=f"Input reference could not be prepared: {redact_error(exc)}")
             # The OpenAI-compatible video endpoint expects this field as a
             # multipart file. Passing a Path lets the SDK construct the
             # upload; a JSON data URI is not accepted by the gateway route.
-            payload["input_reference"] = reference
+            payload["input_reference"] = prepared_reference
 
         client = openai_client()
         try:
@@ -207,6 +213,9 @@ class SoraVideo(BaseTool):
             self._write_download(content, output_path)
         except Exception as exc:
             return ToolResult(success=False, error=f"OpenAI Sora video generation failed: {redact_error(exc)}")
+        finally:
+            if prepared_reference is not None:
+                prepared_reference.unlink(missing_ok=True)
 
         return ToolResult(
             success=True,
@@ -297,6 +306,32 @@ class SoraVideo(BaseTool):
             mime_type = "application/octet-stream"
         encoded = base64.b64encode(path.read_bytes()).decode("ascii")
         return f"data:{mime_type};base64,{encoded}"
+
+    @staticmethod
+    def _prepare_reference(path: Path, size: str) -> Path:
+        """Create an exact-size multipart image accepted by the video API.
+
+        Sora rejects image references whose pixel dimensions differ from the
+        requested output size. ``ImageOps.fit`` preserves the subject while
+        using a deterministic center crop, so arbitrary user uploads work for
+        both landscape and portrait jobs.
+        """
+        from PIL import Image, ImageOps
+
+        width, height = (int(value) for value in size.split("x", 1))
+        with Image.open(path) as source:
+            image = ImageOps.exif_transpose(source).convert("RGB")
+            fitted = ImageOps.fit(
+                image,
+                (width, height),
+                method=Image.Resampling.LANCZOS,
+                centering=(0.5, 0.5),
+            )
+            handle = tempfile.NamedTemporaryFile(prefix="openmontage-sora-reference-", suffix=".jpg", delete=False)
+            output = Path(handle.name)
+            handle.close()
+            fitted.save(output, format="JPEG", quality=95, optimize=True)
+        return output
 
     @staticmethod
     def _write_download(content: Any, output_path: Path) -> None:
