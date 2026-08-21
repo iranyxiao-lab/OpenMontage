@@ -252,7 +252,7 @@ def _apply_production_contract(output: Path, intent: Any, workspace: Path) -> di
     target_duration = float(production.durationSeconds)
     source_probe = _probe_video(output, ffprobe)
     source_is_short = source_probe["durationSeconds"] + 0.05 < target_duration
-    narration = _generate_narration(intent, workspace)
+    narration = _generate_narration(intent, workspace) if (intent.narrationText or "").strip() else None
     music = _resolve_music_source(intent, workspace)
     subtitle = _write_subtitle_asset(intent, workspace, target_duration)
     normalized = output.with_name(f"{output.stem}.normalized{output.suffix}")
@@ -415,7 +415,8 @@ def _probe_video(path: Path, ffprobe: str) -> dict[str, Any]:
 
 
 def _generate_narration(intent: Any, workspace: Path) -> Path:
-    if not intent.brief.strip():
+    narration_text = (intent.narrationText or "").strip()
+    if not narration_text:
         raise RuntimeError("narration_text_missing")
     if not gateway_configured():
         raise RuntimeError("narration_unavailable")
@@ -428,7 +429,7 @@ def _generate_narration(intent: Any, workspace: Path) -> Path:
             # its native conversion route is not implemented.  tts-1 is the
             # verified OpenAI-compatible route and remains gateway-bound.
             model="tts-1",
-            input=intent.brief[:600],
+            input=narration_text[:600],
             voice=voice,
             response_format="mp3",
         )
