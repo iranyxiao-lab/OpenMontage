@@ -63,6 +63,14 @@ def _tool_status(tool: Any) -> str:
 
 
 def _candidate_tools(manifest: dict[str, Any]) -> Iterable[tuple[str, list[str]]]:
+    for mode in manifest.get("production_modes", []) or []:
+        names: list[str] = []
+        for key in ("required_tools", "optional_tools", "tools_available"):
+            for name in mode.get(key, []) or []:
+                if isinstance(name, str) and name and name not in names:
+                    names.append(name)
+        if names:
+            yield f"mode:{mode.get('name', 'unknown')}", names
     for stage in manifest.get("stages", []):
         names: list[str] = []
         for key in ("tools_available", "preferred_tools", "fallback_tools", "optional_tools"):
