@@ -28,3 +28,9 @@ def test_require_ready_pipeline_fails_closed_for_unknown_pipeline(tmp_path: Path
         assert str(exc) == "openmontage_pipeline_not_found"
     else:
         raise AssertionError("unknown pipeline should be rejected")
+
+
+def test_test_manifests_are_not_user_selectable():
+    smoke = next(item for item in build_pipeline_catalog() if item.name == "framework-smoke")
+    assert smoke.status == "DISABLED"
+    assert smoke.reason_code == "test_pipeline_not_user_selectable"
