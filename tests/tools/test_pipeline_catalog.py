@@ -14,6 +14,11 @@ def test_catalog_lists_every_manifest_and_safe_fields():
     assert all("prompt" not in entry.as_dict() for entry in entries)
 
 
+def test_screen_demo_manifest_is_valid_and_not_reported_as_manifest_error():
+    screen_demo = next(item for item in build_pipeline_catalog() if item.name == "screen-demo")
+    assert screen_demo.reason_code != "manifest_invalid"
+
+
 def test_catalog_payload_is_versioned_and_sorted():
     payload = pipeline_catalog_payload()
     assert payload["schemaVersion"] == "openmontage.catalog.v1"
