@@ -153,12 +153,25 @@ def _provider_duration(duration_seconds: int, max_scene_seconds: int) -> int:
 
 def _long_form_stage_result(intent: Any, stage: str) -> dict[str, Any]:
     plan = _build_scene_plan(intent.production.durationSeconds, 12)
+    artifact_type = {
+        "intake": "brief",
+        "research": "research_brief",
+        "proposal": "proposal_packet",
+        "script": "script",
+        "scene_plan": "scene_plan",
+        "assets": "asset_manifest",
+        "edit": "edit_decisions",
+        "compose": "render_report",
+    }.get(stage, "stage_output")
     return {
         "mode": "multi_scene" if len(plan) > 1 else "single_scene",
         "stage": stage,
+        "artifactType": artifact_type,
+        "artifactStatus": "completed",
         "requestedDurationSeconds": intent.production.durationSeconds,
         "sceneCount": len(plan),
         "scenes": plan,
+        "production": intent.production.model_dump(mode="json"),
     }
 
 
