@@ -99,7 +99,7 @@ def _entry_for_manifest(manifest: dict[str, Any], tool_registry: ToolRegistry) -
         else:
             missing.append(stage_name)
 
-    if str(manifest.get("stability", "")).lower() == "test":
+    if str(manifest.get("name", "")) == "framework-smoke" or str(manifest.get("stability", "")).lower() == "test":
         status, reason = "DISABLED", "test_pipeline_not_user_selectable"
     elif missing:
         status, reason = "DISABLED", "required_capability_unavailable"
