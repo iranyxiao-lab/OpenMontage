@@ -187,6 +187,40 @@ def test_ready_endpoint_fails_while_draining():
     assert response.body == b'{"ok":false}'
 
 
+def test_catalog_endpoint_returns_versioned_pipeline_states():
+    runner = Runner(RunnerConfig())
+    app = create_app(runner)
+    response = next(route.endpoint() for route in app.routes if getattr(route, "path", "") == "/catalog")
+    assert response["schemaVersion"] == "openmontage.catalog.v1"
+    assert any(item["name"] == "cinematic" for item in response["pipelines"])
+    assert all(item["status"] in {"READY", "DEGRADED", "DISABLED"} for item in response["pipelines"])
+
+
+def test_non_publish_checkpoint_contains_canonical_artifact_metadata(tmp_path):
+    command = Command.model_validate(fixture("valid-command.json")).model_copy(update={
+        "stage": "scene_plan",
+        "userIntent": UserIntent.model_validate({
+            "brief": "Create a short product montage",
+            "sources": [{"kind": "prompt"}],
+            "production": {
+                "durationSeconds": 8,
+                "aspectRatio": "16:9",
+                "resolution": "720p",
+                "language": "en-US",
+                "voice": "neutral",
+                "subtitleStyle": "none",
+                "music": "none",
+                "visualStyle": "cinematic",
+                "budgetTier": "economy",
+            },
+        }),
+    })
+    payload = json.loads(cluster_pipeline.run(command, tmp_path))
+    assert payload["result"]["artifactType"] == "scene_plan"
+    assert payload["result"]["artifactStatus"] == "completed"
+    assert payload["result"]["sceneCount"] >= 1
+
+
 def test_stage_executor_verifies_checkpoint_receipt_and_task_grant(tmp_path):
     command = Command.model_validate(fixture("valid-command.json"))
     runner = Runner(RunnerConfig(workspace_root=str(tmp_path)))

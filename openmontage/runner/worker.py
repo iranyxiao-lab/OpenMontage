@@ -602,6 +602,14 @@ def create_app(runner: Runner | None = None) -> FastAPI:
     def ready() -> JSONResponse:
         return JSONResponse({"ok": not active.draining}, status_code=200 if not active.draining else 503)
 
+    @app.get("/catalog")
+    def catalog() -> dict[str, Any]:
+        # The catalog is intentionally computed from manifests and the local
+        # tool registry. It contains no prompts, credentials, or provider URLs.
+        from tools.pipeline_catalog import cached_pipeline_catalog_payload
+
+        return cached_pipeline_catalog_payload()
+
     @app.get("/metrics")
     def metrics() -> str:
         return f"openmontage_runner_draining {int(active.draining)}\nopenmontage_runner_completed {len(active._completed)}\n"
