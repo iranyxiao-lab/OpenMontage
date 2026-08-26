@@ -85,11 +85,18 @@ def _candidate_tools(manifest: dict[str, Any]) -> Iterable[tuple[str, list[str]]
         yield "reference_input", names
 
 
+def _required_tool_groups(manifest: dict[str, Any]) -> Iterable[tuple[str, list[str]]]:
+    for stage in manifest.get("stages", []):
+        names = [name for name in stage.get("required_tools", []) or [] if isinstance(name, str) and name]
+        if names:
+            yield str(stage.get("name", "unknown")), names
+
+
 def _entry_for_manifest(manifest: dict[str, Any], tool_registry: ToolRegistry) -> PipelineCatalogEntry:
     missing: list[str] = []
     degraded: list[str] = []
     dependencies: set[str] = set()
-    for stage_name, candidates in _candidate_tools(manifest):
+    for stage_name, candidates in _required_tool_groups(manifest):
         statuses: list[str] = []
         for name in candidates:
             tool = tool_registry.get(name)
@@ -101,11 +108,21 @@ def _entry_for_manifest(manifest: dict[str, Any], tool_registry: ToolRegistry) -
                 dependencies.update(str(value) for value in tool.get_info().get("dependencies", []) or [] if isinstance(value, str))
             except Exception:
                 pass
-        if ToolStatus.AVAILABLE.value in statuses:
-            if any(status != ToolStatus.AVAILABLE.value for status in statuses):
-                degraded.append(stage_name)
+        if all(status == ToolStatus.AVAILABLE.value for status in statuses):
+            continue
+        if statuses and all(status in {ToolStatus.AVAILABLE.value, ToolStatus.DEGRADED.value} for status in statuses):
+            degraded.append(stage_name)
         else:
             missing.append(stage_name)
+    for _, candidates in _candidate_tools(manifest):
+        for name in candidates:
+            tool = tool_registry.get(name)
+            if tool is None:
+                continue
+            try:
+                dependencies.update(str(value) for value in tool.get_info().get("dependencies", []) or [] if isinstance(value, str))
+            except Exception:
+                pass
 
     if str(manifest.get("name", "")) == "framework-smoke" or str(manifest.get("stability", "")).lower() == "test":
         status, reason = "DISABLED", "test_pipeline_not_user_selectable"
