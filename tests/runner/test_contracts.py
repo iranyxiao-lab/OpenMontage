@@ -216,9 +216,69 @@ def test_non_publish_checkpoint_contains_canonical_artifact_metadata(tmp_path):
         }),
     })
     payload = json.loads(cluster_pipeline.run(command, tmp_path))
+    artifact = json.loads((tmp_path / "artifacts" / "scene-plan.json").read_text(encoding="utf-8"))
     assert payload["result"]["artifactType"] == "scene_plan"
     assert payload["result"]["artifactStatus"] == "completed"
     assert payload["result"]["sceneCount"] >= 1
+    assert artifact["scenes"][0]["sceneId"] == "scene-1"
+    assert artifact["director"]["skill"] == "pipelines/animated-explainer/scene-director"
+
+
+def test_manifest_specific_character_stage_produces_director_artifact(tmp_path):
+    command = Command.model_validate(fixture("valid-command.json")).model_copy(update={
+        "stage": "character_design",
+        "pipelineType": "character-animation",
+        "userIntent": UserIntent.model_validate({
+            "brief": "A reusable host character",
+            "sources": [{"kind": "prompt"}],
+            "production": {"durationSeconds": 8, "aspectRatio": "16:9", "resolution": "720p",
+                           "language": "en-US", "voice": "neutral", "subtitleStyle": "none",
+                           "music": "none", "visualStyle": "flat animation", "budgetTier": "economy"},
+        }),
+        "pipelineStages": ["intake", "research", "proposal", "script", "character_design", "rig_plan",
+                           "scene_plan", "assets", "edit", "compose", "publish"],
+    })
+    payload = json.loads(cluster_pipeline.run(command, tmp_path))
+    artifact = json.loads((tmp_path / "artifacts" / "character-design.json").read_text(encoding="utf-8"))
+    assert payload["result"]["artifactType"] == "character_design"
+    assert artifact["director"]["skill"] == "pipelines/character-animation/character-design-director"
+
+
+def test_manifest_director_consumes_prior_artifacts_through_gateway(tmp_path, monkeypatch):
+    prior = tmp_path / "prior-artifacts"
+    prior.mkdir()
+    (prior / "research-brief.json").write_text(json.dumps({"artifactType": "research_brief", "facts": ["verified"]}))
+    command = Command.model_validate(fixture("valid-command.json")).model_copy(update={
+        "stage": "proposal",
+        "pipelineType": "cinematic",
+        "userIntent": UserIntent.model_validate({
+            "brief": "A verified launch film",
+            "sources": [{"kind": "prompt"}],
+            "production": {"durationSeconds": 8, "aspectRatio": "16:9", "resolution": "720p",
+                           "language": "en-US", "voice": "neutral", "subtitleStyle": "none",
+                           "music": "none", "visualStyle": "cinematic", "budgetTier": "economy"},
+        }),
+    })
+
+    class _Model:
+        model_id = "qwen-flash"
+        channel = "ali"
+        capability = "chat"
+
+    class _Gateway:
+        def catalog(self):
+            return {"qwen-flash": _Model()}
+
+        def model_chat(self, **kwargs):
+            assert "research-brief.json" in kwargs["messages"][1]["content"]
+            return {"choices": [{"message": {"content": json.dumps({"concepts": ["direction-a"]})}}]}
+
+    monkeypatch.setattr(cluster_pipeline, "gateway_configured", lambda: True)
+    monkeypatch.setattr(cluster_pipeline, "GatewayClient", _Gateway)
+    cluster_pipeline.run(command, tmp_path)
+    artifact = json.loads((tmp_path / "artifacts" / "proposal-packet.json").read_text(encoding="utf-8"))
+    assert artifact["directorOutput"] == {"concepts": ["direction-a"]}
+    assert artifact["directorModel"] == "qwen-flash"
 
 
 def test_stage_executor_verifies_checkpoint_receipt_and_task_grant(tmp_path):
@@ -407,11 +467,74 @@ def test_long_form_stage_checkpoint_contains_scene_timeline(tmp_path):
         }),
     })
     payload = json.loads(cluster_pipeline.run(command, tmp_path))
+    artifact = json.loads((tmp_path / "artifacts" / "scene-plan.json").read_text(encoding="utf-8"))
     assert payload["result"]["mode"] == "multi_scene"
     assert payload["result"]["sceneCount"] == 3
-    assert [(scene["startSeconds"], scene["endSeconds"]) for scene in payload["result"]["scenes"]] == [
+    assert [(scene["startSeconds"], scene["endSeconds"]) for scene in artifact["scenes"]] == [
         (0, 12), (12, 24), (24, 25)
     ]
+
+
+class _StructuredAgent(HeadlessAgent):
+    def run(self, command, workspace):
+        return cluster_pipeline.run(command, workspace)
+
+
+def test_proposal_emits_approval_with_previewable_stage_artifact(tmp_path):
+    command = Command.model_validate(fixture("valid-command.json")).model_copy(update={
+        "stage": "proposal",
+        "userIntent": UserIntent.model_validate({
+            "brief": "A concise product launch",
+            "narrationText": "A separate approved narration.",
+            "sources": [{"kind": "prompt"}],
+            "production": {"durationSeconds": 8, "aspectRatio": "16:9", "resolution": "720p",
+                           "language": "en-US", "voice": "neutral", "subtitleStyle": "clean",
+                           "music": "none", "visualStyle": "cinematic", "budgetTier": "economy"},
+        }),
+    })
+    config = RunnerConfig(workspace_root=str(tmp_path))
+    event = Runner(config, executor=StageExecutor(config, agent=_StructuredAgent())).handle(command)
+    assert event.type == "ApprovalRequired"
+    assert [artifact.name for artifact in event.artifacts] == ["proposal-packet.json"]
+    assert event.artifacts[0].contentType == "application/json"
+    assert "A concise product launch" not in event.model_dump_json()
+
+
+def test_scene_regeneration_reuses_other_scene_clips(tmp_path, monkeypatch):
+    intent = UserIntent.model_validate({
+        "brief": "Regenerate only the middle scene",
+        "sources": [{"kind": "prompt"}],
+        "targetSceneId": "scene-2",
+        "sourceRunRevision": 1,
+        "sourceSceneRevision": 1,
+        "production": {"durationSeconds": 25, "aspectRatio": "16:9", "resolution": "720p",
+                       "language": "en-US", "voice": "neutral", "subtitleStyle": "none",
+                       "music": "none", "visualStyle": "cinematic", "budgetTier": "economy"},
+    })
+    prior = tmp_path / "prior-scenes"
+    prior.mkdir()
+    (prior / "scene-1.mp4").write_bytes(b"scene-1")
+    (prior / "scene-3.mp4").write_bytes(b"scene-3")
+    calls = []
+
+    class _Result:
+        success = True
+
+    class _Sora:
+        def execute(self, inputs):
+            calls.append(inputs)
+            Path(inputs["output_path"]).write_bytes(b"scene-2-new")
+            return _Result()
+
+    stitched = []
+    monkeypatch.setattr(cluster_pipeline, "SoraVideo", _Sora)
+    monkeypatch.setattr(cluster_pipeline, "_concatenate_scenes", lambda paths, output: (stitched.extend(paths), output.write_bytes(b"new-final")))
+    output = tmp_path / "renders" / "final.mp4"
+    output.parent.mkdir()
+    cluster_pipeline._generate_sora_scenes("sora-2", intent, cluster_pipeline._build_scene_plan(25, 12), output, None)
+    assert len(calls) == 1
+    assert calls[0]["output_path"].endswith("scene-2.mp4")
+    assert [path.read_bytes() for path in stitched] == [b"scene-1", b"scene-2-new", b"scene-3"]
 
 
 def test_cluster_pipeline_passes_uploaded_image_to_sora(tmp_path, monkeypatch):

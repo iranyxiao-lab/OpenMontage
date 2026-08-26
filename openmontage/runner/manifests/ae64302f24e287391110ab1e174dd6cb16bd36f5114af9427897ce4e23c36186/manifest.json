@@ -2,10 +2,13 @@
   "manifestVersion": "sha256:ae64302f24e287391110ab1e174dd6cb16bd36f5114af9427897ce4e23c36186",
   "stages": {
     "intake": {"entrypoint": "openmontage.runner.cluster_pipeline:run"},
+    "idea": {"entrypoint": "openmontage.runner.cluster_pipeline:run"},
     "research": {"entrypoint": "openmontage.runner.cluster_pipeline:run"},
     "proposal": {"entrypoint": "openmontage.runner.cluster_pipeline:run"},
     "script": {"entrypoint": "openmontage.runner.cluster_pipeline:run"},
     "scene_plan": {"entrypoint": "openmontage.runner.cluster_pipeline:run"},
+    "character_design": {"entrypoint": "openmontage.runner.cluster_pipeline:run"},
+    "rig_plan": {"entrypoint": "openmontage.runner.cluster_pipeline:run"},
     "assets": {"entrypoint": "openmontage.runner.cluster_pipeline:run"},
     "edit": {"entrypoint": "openmontage.runner.cluster_pipeline:run"},
     "compose": {"entrypoint": "openmontage.runner.cluster_pipeline:run"},

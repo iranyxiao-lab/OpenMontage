@@ -67,6 +67,12 @@ class ObjectStoreClient:
             raise ValueError("input_digest_mismatch")
         return body
 
+    def get_by_key(self, object_key: str, *, max_bytes: int) -> bytes:
+        body = self._objects.get(object_key)
+        if body is None or len(body) > max_bytes:
+            raise ValueError("input_not_available")
+        return body
+
 
 class AlibabaOssObjectStoreClient(ObjectStoreClient):
     """Grant-scoped Alibaba Cloud OSS adapter.
@@ -136,6 +142,21 @@ class AlibabaOssObjectStoreClient(ObjectStoreClient):
             raise ValueError("input_digest_mismatch")
         return body
 
+    def get_by_key(self, object_key: str, *, max_bytes: int) -> bytes:
+        try:
+            result = self._client.get_object(self._oss.GetObjectRequest(bucket=self.bucket, key=object_key))
+            body = result.body.read() if hasattr(result.body, "read") else bytes(result.body)
+        except Exception as exc:
+            raise RuntimeError("oss_get_failed") from exc
+        if not body or len(body) > max_bytes:
+            raise ValueError("input_limit_exceeded")
+        metadata = getattr(result, "metadata", None) or {}
+        stored_digest = metadata.get("sha256") or metadata.get("x-oss-meta-sha256")
+        digest = "sha256:" + hashlib.sha256(body).hexdigest()
+        if stored_digest and stored_digest != digest:
+            raise ValueError("input_digest_mismatch")
+        return body
+
 
 def _oss_credentials_provider(oss: Any) -> Any:
     """Load OSS_ACCESS_KEY_* and optional OSS_SESSION_TOKEN from the environment."""
@@ -172,12 +193,42 @@ class GrantStore:
                 for source in command.userIntent.sources
                 if source.objectKey and source.sizeBytes
             )
+            intent = command.userIntent
+            if command.stage == "publish" and intent.targetSceneId and intent.sourceRunRevision:
+                max_scene_seconds = 12 if intent.production.model in (None, "sora-2", "sora-2-pro") else 10
+                scene_count = max(1, (intent.production.durationSeconds + max_scene_seconds - 1) // max_scene_seconds)
+                checks = tuple(checks) + tuple(
+                    ("GET", f"montage/{command.taskId}/run-{intent.sourceRunRevision}/artifacts/scene-{index}.mp4", 1)
+                    for index in range(1, scene_count + 1)
+                )
+        artifact_key = f"montage/{command.taskId}/run-{command.runRevision}/artifacts/{_stage_artifact_name(command.stage)}"
+        checks = tuple(checks) + (("PUT", artifact_key, 1), ("HEAD", artifact_key, 1))
+        if command.stage == "publish":
+            intent = command.userIntent
+            max_scene_seconds = 12 if intent is None or intent.production.model in (None, "sora-2", "sora-2-pro") else 10
+            scene_count = 1 if intent is None else max(1, (intent.production.durationSeconds + max_scene_seconds - 1) // max_scene_seconds)
+            publish_names = ["final.mp4"] + [f"scene-{index}.mp4" for index in range(1, scene_count + 1)]
+            checks = tuple(checks) + tuple(
+                (method, f"montage/{command.taskId}/run-{command.runRevision}/artifacts/{name}", 1)
+                for name in publish_names for method in ("PUT", "HEAD")
+            )
         for method, object_key, size in checks:
             try:
                 self.authorize(command, method, object_key, size)
             except PermissionError:
                 return False
         return True
+
+    def targets(self, command: Command, method: str) -> list[Any]:
+        targets: dict[str, Any] = {}
+        for (job_id, attempt, revision, stage, grant_method, object_key), grant in self._grants.items():
+            if (job_id, attempt, revision, stage, grant_method) != (
+                    command.jobId, command.attempt, command.runRevision, command.stage, method):
+                continue
+            target = next((item for item in grant.targets if item.objectKey == object_key), None)
+            if target is not None:
+                targets[object_key] = target
+        return list(targets.values())
 
 
 class HeadlessAgent:
@@ -248,6 +299,8 @@ class StageExecutor:
             (workspace / "run-spec.json").write_bytes(run_spec)
         if self.config.require_grants:
             self._materialize_source_media(command, workspace)
+            self._materialize_prior_artifacts(command, workspace)
+            self._materialize_prior_scenes(command, workspace)
         payload = self.agent.run(command, workspace)
         digest = "sha256:" + hashlib.sha256(payload).hexdigest()
         key = f"montage/{command.taskId}/run-{command.runRevision}/checkpoints/{command.stage}.json"
@@ -287,27 +340,53 @@ class StageExecutor:
         if manifest:
             (media_dir / "manifest.json").write_text(_json(manifest), encoding="utf-8")
 
+    def _materialize_prior_scenes(self, command: Command, workspace: Path) -> None:
+        intent = command.userIntent
+        if command.stage != "publish" or intent is None or not intent.targetSceneId:
+            return
+        scene_dir = workspace / "prior-scenes"
+        for target in self.grants.targets(command, "GET"):
+            if "/artifacts/scene-" not in target.objectKey or not target.objectKey.endswith(".mp4"):
+                continue
+            self.grants.authorize(command, "GET", target.objectKey, 1)
+            body = self.object_store.get_by_key(target.objectKey, max_bytes=target.maxBytes)
+            scene_dir.mkdir(parents=True, exist_ok=True)
+            (scene_dir / Path(target.objectKey).name).write_bytes(body)
+
+    def _materialize_prior_artifacts(self, command: Command, workspace: Path) -> None:
+        artifact_dir = workspace / "prior-artifacts"
+        for target in self.grants.targets(command, "GET"):
+            if "/artifacts/" not in target.objectKey or not target.objectKey.endswith(".json"):
+                continue
+            self.grants.authorize(command, "GET", target.objectKey, 1)
+            body = self.object_store.get_by_key(target.objectKey, max_bytes=target.maxBytes)
+            artifact_dir.mkdir(parents=True, exist_ok=True)
+            (artifact_dir / Path(target.objectKey).name).write_bytes(body)
+
     def _publish_artifacts(self, command: Command, workspace: Path) -> list[dict[str, Any]]:
-        """Upload media emitted by the headless publish stage without exposing local paths."""
-        if command.stage != "publish":
-            return []
-        candidates = [
-            path for path in (
+        """Upload bounded stage artifacts without exposing local paths."""
+        candidates = sorted((workspace / "artifacts").glob("*.json"))
+        if command.stage == "publish":
+            candidates.extend(path for path in (
                 workspace / "renders" / "final.mp4",
                 workspace / "final.mp4",
                 workspace / "renders" / "final.webm",
                 workspace / "final.webm",
-            ) if path.is_file()
-        ]
+            ) if path.is_file())
+            candidates.extend(sorted((workspace / "renders" / "scenes").glob("scene-*.mp4")))
         artifacts: list[dict[str, Any]] = []
-        for path in candidates[:8]:
+        for path in candidates[:128]:
             body = path.read_bytes()
             if not body:
                 continue
             name = path.name
             key = f"montage/{command.taskId}/run-{command.runRevision}/artifacts/{name}"
             digest = "sha256:" + hashlib.sha256(body).hexdigest()
-            content_type = "video/mp4" if path.suffix.lower() == ".mp4" else "video/webm"
+            content_type = {
+                ".json": "application/json",
+                ".mp4": "video/mp4",
+                ".webm": "video/webm",
+            }.get(path.suffix.lower(), "application/octet-stream")
             if self.config.require_grants:
                 self.grants.authorize(command, "PUT", key, len(body))
             ref = self.object_store.put(key, body, sha256=digest, max_bytes=command.limits.maxOutputBytes)
@@ -347,6 +426,23 @@ class StageExecutor:
 
 def _json(value: Any) -> str:
     return json.dumps(value, separators=(",", ":"), sort_keys=True, default=lambda x: x.isoformat())
+
+
+def _stage_artifact_name(stage: str) -> str:
+    return {
+        "intake": "intake-brief.json",
+        "idea": "idea-brief.json",
+        "research": "research-brief.json",
+        "proposal": "proposal-packet.json",
+        "script": "script.json",
+        "scene_plan": "scene-plan.json",
+        "character_design": "character-design.json",
+        "rig_plan": "rig-plan.json",
+        "assets": "asset-manifest.json",
+        "edit": "edit-decisions.json",
+        "compose": "render-report.json",
+        "publish": "publish-log.json",
+    }[stage]
 
 
 @dataclass
@@ -494,7 +590,9 @@ class Runner:
 
     def _success(self, command: Command, checkpoint: Ref | None = None, artifacts: list[dict[str, Any]] | None = None, deterministic: bool = False) -> Event:
         now = datetime.now(timezone.utc)
-        event_type = "TaskSucceeded" if command.stage == "publish" else "StageSucceeded"
+        event_type = "TaskSucceeded" if command.stage == "publish" else (
+            "ApprovalRequired" if command.stage in {"idea", "proposal", "scene_plan"} else "StageSucceeded"
+        )
         return Event(schemaVersion="openmontage.event.v1", eventId=f"event-{uuid.uuid4().hex}",
                      jobId=command.jobId, taskId=command.taskId, runId=command.runId,
                      attempt=command.attempt, runRevision=command.runRevision, type=event_type,
@@ -513,8 +611,9 @@ class Runner:
         code = "TASK_GRANT_DENIED" if "task_grant_denied" in text else (
             "TASK_GRANT_LIMIT_EXCEEDED" if "task_grant_limit_exceeded" in text else (
                 "PUBLISH_ARTIFACT_MISSING" if "publish_artifact_missing" in text else (
-                    "PUBLISH_ARTIFACT_INVALID" if "publish_artifact_invalid" in text else (
-                        "VIDEO_GENERATION_FAILED" if "video_generation_failed" in text else "WORKER_EXECUTION_FAILED"))))
+                "PUBLISH_ARTIFACT_INVALID" if "publish_artifact_invalid" in text else (
+                        "PRIOR_SCENE_ARTIFACT_MISSING" if "prior_scene_artifact_missing" in text else (
+                            "VIDEO_GENERATION_FAILED" if "video_generation_failed" in text else "WORKER_EXECUTION_FAILED")))))
         retryable = code in {"VIDEO_GENERATION_FAILED", "WORKER_EXECUTION_FAILED"}
         summary = "task grant authorization failed" if code.startswith("TASK_GRANT") else (
             "publish stage produced no valid media" if code.startswith("PUBLISH_ARTIFACT") else (

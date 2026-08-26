@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
+import re
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -106,6 +107,9 @@ class UserIntent(StrictModel):
     narrationText: str | None = Field(default=None, max_length=4000)
     sources: list[Source] = Field(min_length=1, max_length=16)
     production: ProductionSettings
+    targetSceneId: str | None = Field(default=None, pattern=r"^[A-Za-z0-9._-]{1,128}$")
+    sourceRunRevision: int | None = Field(default=None, ge=1, le=1000)
+    sourceSceneRevision: int | None = Field(default=None, ge=1, le=1000)
 
     @field_validator("narrationText")
     @classmethod
@@ -113,6 +117,13 @@ class UserIntent(StrictModel):
         if value is not None and any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
             raise ValueError("narration text contains control characters")
         return value
+
+    @model_validator(mode="after")
+    def complete_scene_regeneration_target(self) -> "UserIntent":
+        fields = (self.targetSceneId, self.sourceRunRevision, self.sourceSceneRevision)
+        if any(value is not None for value in fields) and not all(value is not None for value in fields):
+            raise ValueError("scene regeneration target must be complete")
+        return self
 
 
 class Command(StrictModel):
@@ -133,6 +144,15 @@ class Command(StrictModel):
     limits: Limits
     trace: Trace
     userIntent: UserIntent | None = None
+    pipelineStages: list[str] | None = Field(default=None, min_length=1, max_length=32)
+
+    @field_validator("pipelineStages")
+    @classmethod
+    def valid_pipeline_stages(cls, value: list[str] | None) -> list[str] | None:
+        if value is not None:
+            if len(set(value)) != len(value) or any(not re.fullmatch(r"[a-z][a-z_]{0,31}", stage) for stage in value):
+                raise ValueError("invalid pipeline stages")
+        return value
 
     @model_validator(mode="after")
     def no_sensitive_material(self) -> "Command":

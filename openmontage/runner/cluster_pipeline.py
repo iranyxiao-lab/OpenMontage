@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import shutil
@@ -11,18 +12,38 @@ from typing import Any
 from tools.video.sora_video import SoraVideo
 from tools.gateway_client import GatewayClient, GatewayRequestError, gateway_configured
 from tools.gateway_model_catalog import GatewayModel
+from tools.tool_registry import registry
+from lib.pipeline_loader import load_pipeline
 
 
 _STAGES = {
     "intake",
+    "idea",
     "research",
     "proposal",
     "script",
     "scene_plan",
+    "character_design",
+    "rig_plan",
     "assets",
     "edit",
     "compose",
     "publish",
+}
+
+_STAGE_ARTIFACT_NAMES = {
+    "intake": "intake-brief.json",
+    "idea": "idea-brief.json",
+    "research": "research-brief.json",
+    "proposal": "proposal-packet.json",
+    "script": "script.json",
+    "scene_plan": "scene-plan.json",
+    "character_design": "character-design.json",
+    "rig_plan": "rig-plan.json",
+    "assets": "asset-manifest.json",
+    "edit": "edit-decisions.json",
+    "compose": "render-report.json",
+    "publish": "publish-log.json",
 }
 
 
@@ -39,8 +60,22 @@ def run(command: Any, workspace: Path) -> bytes:
         "runRevision": command.runRevision,
     }
     if command.stage != "publish":
-        if command.userIntent is not None and command.stage in {"scene_plan", "assets", "edit", "compose"}:
-            checkpoint["result"] = _long_form_stage_result(command.userIntent, command.stage)
+        intent = command.userIntent
+        if intent is None:
+            raise RuntimeError("stage_user_intent_missing")
+        artifact = _stage_artifact(command, intent, workspace)
+        artifact_name = _STAGE_ARTIFACT_NAMES[command.stage]
+        artifact_dir = workspace / "artifacts"
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        artifact_bytes = _encode(artifact)
+        (artifact_dir / artifact_name).write_bytes(artifact_bytes)
+        checkpoint["result"] = {
+            "artifactType": artifact["artifactType"],
+            "artifactStatus": "completed",
+            "artifactName": artifact_name,
+            "sceneCount": len(artifact.get("scenes", [])),
+            "mode": "multi_scene" if len(artifact.get("scenes", [])) > 1 else "single_scene",
+        }
         return _encode(checkpoint)
 
     intent = command.userIntent
@@ -76,7 +111,215 @@ def run(command: Any, workspace: Path) -> bytes:
         "scenePlan": scene_plan,
         "production": actual,
     }
+    artifact_dir = workspace / "artifacts"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    (artifact_dir / _STAGE_ARTIFACT_NAMES["publish"]).write_bytes(_encode({
+        "schemaVersion": "openmontage.artifact.v1",
+        "artifactType": "publish_log",
+        "stage": "publish",
+        "runRevision": command.runRevision,
+        "sceneCount": len(scene_plan),
+        "scenes": scene_plan,
+        "deliverables": [{"name": output.name, "contentType": "video/mp4"}],
+        "production": actual,
+    }))
     return _encode(checkpoint)
+
+
+def _stage_artifact(command: Any, intent: Any, workspace: Path) -> dict[str, Any]:
+    """Build a bounded canonical artifact for a single manifest stage."""
+
+    manifest_stage = _manifest_stage(command.pipelineType, command.stage)
+    plan = _build_scene_plan(intent.production.durationSeconds, 12)
+    narration = (intent.narrationText or "").strip()
+    source_inventory = _source_inventory(intent, workspace)
+    base: dict[str, Any] = {
+        "schemaVersion": "openmontage.artifact.v1",
+        "artifactType": {
+            "intake": "brief",
+            "idea": "brief",
+            "research": "research_brief",
+            "proposal": "proposal_packet",
+            "script": "script",
+            "scene_plan": "scene_plan",
+            "character_design": "character_design",
+            "rig_plan": "rig_plan",
+            "assets": "asset_manifest",
+            "edit": "edit_decisions",
+            "compose": "render_report",
+        }.get(command.stage, next(iter(manifest_stage.get("produces", [])), "stage_output")),
+        "stage": command.stage,
+        "pipelineType": command.pipelineType,
+        "runRevision": command.runRevision,
+        "production": intent.production.model_dump(mode="json"),
+        "regeneration": _regeneration_summary(intent),
+        "director": manifest_stage,
+    }
+    if command.stage in {"intake", "idea"}:
+        base.update({
+            "brief": intent.brief,
+            "narration": {"provided": bool(narration), "text": narration or None},
+            "sources": source_inventory,
+        })
+    elif command.stage == "research":
+        base.update({
+            "sources": source_inventory,
+            "findings": _research_findings(source_inventory),
+            "constraints": _production_constraints(intent),
+        })
+    elif command.stage == "proposal":
+        composition = _composition_options()
+        base.update({
+            "summary": intent.brief,
+            "estimatedCostUsd": _estimated_cost(intent),
+            "approvalRequired": True,
+            "composition": {
+                "recommendedRuntime": composition[0],
+                "options": composition,
+                "selectionPolicy": "approval_accepts_recommendation",
+            },
+            "stages": ["research", "proposal", "script", "scene_plan", "assets", "edit", "compose", "publish"],
+        })
+    elif command.stage == "script":
+        base.update({
+            "narrationProvided": bool(narration),
+            "narrationText": narration or None,
+            "visualBrief": intent.brief,
+            "beats": _script_beats(plan, narration),
+        })
+    elif command.stage == "scene_plan":
+        base.update({"approvalRequired": True, "scenes": _scene_artifacts(plan, intent, narration)})
+    elif command.stage == "assets":
+        base.update({
+            "sources": source_inventory,
+            "scenes": [{
+                "sceneId": scene["sceneId"],
+                "status": "planned",
+                "bindings": [item["sourceId"] for item in source_inventory],
+                "generation": {"model": intent.production.model, "strategy": "automatic" if not intent.production.model else "fixed"},
+            } for scene in _scene_artifacts(plan, intent, narration) if _scene_selected(intent, scene["sceneId"])],
+        })
+    elif command.stage == "edit":
+        base.update({
+            "scenes": [{
+                "sceneId": scene["sceneId"],
+                "startSeconds": scene["startSeconds"],
+                "endSeconds": scene["endSeconds"],
+                "transition": "cut" if scene["index"] == 1 else "crossfade",
+            } for scene in _scene_artifacts(plan, intent, narration)],
+            "audio": {"narration": bool(narration), "music": intent.production.music, "subtitles": intent.production.subtitleStyle},
+        })
+    elif command.stage == "compose":
+        base.update({
+            "scenes": _scene_artifacts(plan, intent, narration),
+            "render": {"status": "ready", "contentType": "video/mp4", "resolution": intent.production.resolution},
+        })
+    directed = _directed_stage_output(command, intent, workspace, manifest_stage)
+    if directed is not None:
+        base["directorOutput"] = directed["output"]
+        base["directorModel"] = directed["model"]
+        base["directorProvider"] = directed["provider"]
+    return base
+
+
+def _manifest_stage(pipeline_type: str, stage: str) -> dict[str, Any]:
+    manifest = load_pipeline(pipeline_type)
+    if stage == "intake":
+        return {"skill": "meta/onboarding", "reviewFocus": [], "successCriteria": ["validated user intent"]}
+    definition = next((item for item in manifest.get("stages", []) if item.get("name") == stage), None)
+    if definition is None:
+        raise RuntimeError("manifest_stage_unsupported")
+    return {
+        "skill": definition.get("skill"),
+        "produces": list(definition.get("produces", []) or []),
+        "reviewFocus": list(definition.get("review_focus", []) or []),
+        "successCriteria": list(definition.get("success_criteria", []) or []),
+        "approvalRequired": bool(definition.get("human_approval_default", False)),
+    }
+
+
+def _directed_stage_output(command: Any, intent: Any, workspace: Path,
+                           manifest_stage: dict[str, Any]) -> dict[str, Any] | None:
+    """Execute the manifest's director skill through a gateway chat model."""
+
+    if command.stage == "intake" or not gateway_configured():
+        return None
+    skill_name = manifest_stage.get("skill")
+    if not isinstance(skill_name, str) or not skill_name:
+        raise RuntimeError("manifest_stage_skill_missing")
+    root = Path(__file__).resolve().parents[2]
+    skill_path = root / "skills" / (skill_name + ".md")
+    if not skill_path.is_file():
+        raise RuntimeError("manifest_stage_skill_missing")
+    skill_text = skill_path.read_text(encoding="utf-8")[:24_000]
+    prior = _prior_artifact_context(workspace)
+    client = GatewayClient()
+    catalog = client.catalog()
+    chat_models = [item for item in catalog.values() if item.capability == "chat"]
+    if not chat_models:
+        raise RuntimeError("stage_director_model_unavailable")
+    selected = next((item for item in chat_models if item.model_id == "qwen-flash"), chat_models[0])
+    request = {
+        "pipeline": command.pipelineType,
+        "stage": command.stage,
+        "brief": intent.brief,
+        "narrationText": intent.narrationText,
+        "production": intent.production.model_dump(mode="json"),
+        "sources": [{"kind": source.kind, "hasObject": bool(source.objectKey), "hasLink": bool(source.locator)}
+                    for source in intent.sources],
+        "priorArtifacts": prior,
+        "requiredOutput": manifest_stage.get("produces", []),
+        "successCriteria": manifest_stage.get("successCriteria", []),
+    }
+    try:
+        response = client.model_chat(
+            model=selected.model_id,
+            messages=[
+                {"role": "system", "content": (
+                    "You are the OpenMontage stage director. Follow the supplied director skill. "
+                    "Return one bounded JSON object only. Do not include credentials, URLs, markdown fences, "
+                    "or claims about work that was not performed.\n\n" + skill_text
+                )},
+                {"role": "user", "content": json.dumps(request, ensure_ascii=False)},
+            ],
+            temperature=0.2,
+            max_tokens=4096,
+            response_format={"type": "json_object"},
+        )
+        content = response["choices"][0]["message"]["content"]
+        output = json.loads(_strip_json_fence(content))
+        if not isinstance(output, dict) or len(json.dumps(output, ensure_ascii=False)) > 64 * 1024:
+            raise ValueError("director output invalid")
+        lowered = json.dumps(output, ensure_ascii=False).lower()
+        if any(marker in lowered for marker in ("authorization", "bearer ", "access_key", "apikey", "x-oss-signature")):
+            raise ValueError("director output contains sensitive material")
+        return {"output": output, "model": selected.model_id, "provider": selected.channel}
+    except (GatewayRequestError, KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError("stage_director_failed") from exc
+
+
+def _prior_artifact_context(workspace: Path) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    total = 0
+    for path in sorted((workspace / "prior-artifacts").glob("*.json")):
+        if total >= 96 * 1024:
+            break
+        try:
+            text = path.read_text(encoding="utf-8")
+            total += len(text.encode("utf-8"))
+            if total <= 96 * 1024:
+                result.append({"name": path.name, "artifact": json.loads(text)})
+        except (OSError, ValueError):
+            continue
+    return result
+
+
+def _strip_json_fence(value: str) -> str:
+    text = value.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s*```$", "", text)
+    return text.strip()
 
 
 def _video_prompt(intent: Any, scene: dict[str, Any] | None = None) -> str:
@@ -175,13 +418,130 @@ def _long_form_stage_result(intent: Any, stage: str) -> dict[str, Any]:
     }
 
 
+def _source_inventory(intent: Any, workspace: Path) -> list[dict[str, Any]]:
+    materialized: dict[str, Path] = {}
+    manifest_path = workspace / "inputs" / "manifest.json"
+    if manifest_path.is_file():
+        try:
+            entries = json.loads(manifest_path.read_text(encoding="utf-8"))
+            for index, entry in enumerate(entries):
+                path = Path(str(entry.get("path", "")))
+                if path.is_file():
+                    materialized[f"{entry.get('kind', 'source')}:{index}"] = path
+        except (OSError, ValueError, TypeError):
+            materialized = {}
+
+    inventory: list[dict[str, Any]] = []
+    local_index = 0
+    for index, source in enumerate(intent.sources):
+        local = None
+        if source.objectKey:
+            local = next(iter(list(materialized.values())[local_index:local_index + 1]), None)
+            local_index += 1
+        source_id = "source-" + hashlib.sha256(
+            f"{index}:{source.kind}:{source.objectKey or source.locator or ''}".encode("utf-8")
+        ).hexdigest()[:12]
+        inventory.append({
+            "sourceId": source_id,
+            "kind": source.kind,
+            "materialized": bool(local),
+            "mediaType": local.suffix.lower().lstrip(".") if local else None,
+            "sizeBytes": local.stat().st_size if local else source.sizeBytes,
+            "externalReference": bool(source.locator),
+        })
+    return inventory
+
+
+def _research_findings(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [{
+        "sourceId": source["sourceId"],
+        "kind": source["kind"],
+        "usable": source["kind"] == "prompt" or source["materialized"] or source["externalReference"],
+        "analysis": "available_for_scene_binding" if source["kind"] != "prompt" else "creative_brief_available",
+    } for source in sources]
+
+
+def _production_constraints(intent: Any) -> list[dict[str, Any]]:
+    production = intent.production
+    return [
+        {"name": "duration", "value": production.durationSeconds, "unit": "seconds"},
+        {"name": "aspectRatio", "value": production.aspectRatio},
+        {"name": "resolution", "value": production.resolution},
+        {"name": "language", "value": production.language},
+        {"name": "subtitles", "value": production.subtitleStyle},
+        {"name": "music", "value": production.music},
+    ]
+
+
+def _estimated_cost(intent: Any) -> float:
+    rate = {"economy": 0.04, "balanced": 0.08, "premium": 0.16}[intent.production.budgetTier]
+    return round(max(0.01, intent.production.durationSeconds * rate), 2)
+
+
+def _composition_options() -> list[str]:
+    try:
+        registry.discover()
+        runtimes = registry.provider_menu_summary().get("composition_runtimes", {})
+        available = [name for name in ("remotion", "hyperframes", "ffmpeg") if runtimes.get(name)]
+        return available or ["ffmpeg"]
+    except Exception:
+        return ["ffmpeg"]
+
+
+def _script_beats(plan: list[dict[str, Any]], narration: str) -> list[dict[str, Any]]:
+    words = narration.split()
+    per_scene = max(1, (len(words) + len(plan) - 1) // max(1, len(plan))) if words else 0
+    beats: list[dict[str, Any]] = []
+    for offset, scene in enumerate(plan):
+        excerpt = " ".join(words[offset * per_scene:(offset + 1) * per_scene]) if words else None
+        beats.append({
+            "sceneId": f"scene-{scene['index']}",
+            "startSeconds": scene["startSeconds"],
+            "endSeconds": scene["endSeconds"],
+            "narrationText": excerpt,
+        })
+    return beats
+
+
+def _scene_artifacts(plan: list[dict[str, Any]], intent: Any, narration: str) -> list[dict[str, Any]]:
+    beats = {beat["sceneId"]: beat for beat in _script_beats(plan, narration)}
+    return [{
+        **scene,
+        "sceneId": f"scene-{scene['index']}",
+        "visualBrief": f"{intent.brief} | {scene['role']}",
+        "narrationText": beats[f"scene-{scene['index']}"]["narrationText"],
+    } for scene in plan]
+
+
+def _regeneration_summary(intent: Any) -> dict[str, Any] | None:
+    if not intent.targetSceneId:
+        return None
+    return {
+        "targetSceneId": intent.targetSceneId,
+        "sourceRunRevision": intent.sourceRunRevision,
+        "sourceSceneRevision": intent.sourceSceneRevision,
+    }
+
+
+def _scene_selected(intent: Any, scene_id: str) -> bool:
+    return intent.targetSceneId is None or intent.targetSceneId == scene_id
+
+
 def _generate_sora_scenes(model: str, intent: Any, scene_plan: list[dict[str, Any]],
                           output: Path, reference_path: str | None) -> None:
     scene_dir = output.parent / "scenes"
     scene_dir.mkdir(parents=True, exist_ok=True)
     scene_paths: list[Path] = []
     for scene in scene_plan:
-        scene_output = output if len(scene_plan) == 1 else scene_dir / f"scene-{scene['index']:03d}.mp4"
+        scene_id = f"scene-{scene['index']}"
+        scene_output = scene_dir / f"{scene_id}.mp4"
+        if not _scene_selected(intent, scene_id):
+            prior = output.parent.parent / "prior-scenes" / scene_output.name
+            if not prior.is_file():
+                raise RuntimeError("prior_scene_artifact_missing")
+            shutil.copy2(prior, scene_output)
+            scene_paths.append(scene_output)
+            continue
         video_inputs: dict[str, Any] = {
             "prompt": _video_prompt(intent, scene),
             "model": model,
@@ -197,6 +557,8 @@ def _generate_sora_scenes(model: str, intent: Any, scene_plan: list[dict[str, An
         scene_paths.append(scene_output)
     if len(scene_paths) > 1:
         _concatenate_scenes(scene_paths, output)
+    elif scene_paths:
+        shutil.copy2(scene_paths[0], output)
 
 
 def _concatenate_scenes(scene_paths: list[Path], output: Path) -> None:
@@ -548,13 +910,23 @@ def _generate_gateway_scenes(model: str, intent: Any, scene_plan: list[dict[str,
     scene_paths: list[Path] = []
     provider = route = ""
     for scene in scene_plan:
-        scene_output = output if len(scene_plan) == 1 else scene_dir / f"scene-{scene['index']:03d}.mp4"
+        scene_id = f"scene-{scene['index']}"
+        scene_output = scene_dir / f"{scene_id}.mp4"
+        if not _scene_selected(intent, scene_id):
+            prior = output.parent.parent / "prior-scenes" / scene_output.name
+            if not prior.is_file():
+                raise RuntimeError("prior_scene_artifact_missing")
+            shutil.copy2(prior, scene_output)
+            scene_paths.append(scene_output)
+            continue
         provider, route = _generate_gateway_video(
             model, intent, scene_output, workspace, scene=scene,
         )
         scene_paths.append(scene_output)
     if len(scene_paths) > 1:
         _concatenate_scenes(scene_paths, output)
+    elif scene_paths:
+        shutil.copy2(scene_paths[0], output)
     return provider, route
 
 

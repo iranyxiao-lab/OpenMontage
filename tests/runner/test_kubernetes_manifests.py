@@ -163,7 +163,7 @@ def test_cluster_manifest_is_versioned_and_declares_all_stages():
     manifest = json.loads((versions[0] / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["manifestVersion"] == f"sha256:{versions[0].name}"
     assert set(manifest["stages"]) == {
-        "intake", "research", "proposal", "script", "scene_plan",
+        "intake", "idea", "research", "proposal", "script", "character_design", "rig_plan", "scene_plan",
         "assets", "edit", "compose", "publish",
     }
 

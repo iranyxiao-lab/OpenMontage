@@ -195,7 +195,7 @@ def cached_pipeline_catalog_payload() -> dict[str, Any]:
 def require_ready_pipeline(name: str, defs_dir: Path | None = None, tool_registry: ToolRegistry | None = None) -> PipelineCatalogEntry:
     for entry in build_pipeline_catalog(defs_dir=defs_dir, tool_registry=tool_registry):
         if entry.name == name:
-            if entry.status == "DISABLED":
+            if entry.status != "READY":
                 raise ValueError(f"openmontage_pipeline_disabled:{entry.reason_code}")
             return entry
     raise ValueError("openmontage_pipeline_not_found")
