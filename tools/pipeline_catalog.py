@@ -190,6 +190,7 @@ def pipeline_catalog_payload(defs_dir: Path | None = None, tool_registry: ToolRe
                     "capability": item.capability,
                     "status": "READY",
                     "inputTypes": list(item.input_types),
+                    "requiredInputTypes": list(item.required_input_types),
                 })
     except Exception:
         # Model probing is advisory; pipeline readiness remains independently

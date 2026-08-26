@@ -13,11 +13,12 @@ from tools.gateway_model_catalog import (
 )
 
 
-def test_registry_contains_the_four_byteplus_and_eighty_bailian_models():
+def test_registry_contains_current_byteplus_and_bailian_models():
     catalog = model_catalog()
     assert set(BYTEPLUS_CHAT + BYTEPLUS_IMAGE + BYTEPLUS_VIDEO) <= set(catalog)
     assert sum(item.channel == "byteplus-modelark" for item in catalog.values()) == 4
-    assert sum(item.channel == "ali" for item in catalog.values()) == 80
+    assert sum(item.channel == "ali" for item in catalog.values()) == 81
+    assert catalog["wan3.0-video-prime"].capability == "video_generation"
     # The gateway also exposes a small set of OpenAI-compatible TTS models
     # used by the verified narration route. Keep this compatibility set
     # explicit while allowing the channel registries to evolve independently.
@@ -39,6 +40,18 @@ def test_visibility_requires_gateway_owner_and_does_not_trust_unknown_models():
     assert visible["qwen-plus"].channel == "ali"
 
 
+def test_native_video_endpoint_types_are_visible_only_for_matching_protocols():
+    records = [
+        {"id": "dreamina-seedance-2-0-fast-260128", "owned_by": "byteplus-modelark",
+         "supported_endpoint_types": ["configurable-task", "byteplus-seedance"]},
+        {"id": "wan2.7-t2v", "owned_by": "ali",
+         "supported_endpoint_types": ["configurable-task", "legacy-video"]},
+        {"id": "qwen-plus", "owned_by": "ali", "supported_endpoint_types": ["legacy-video"]},
+    ]
+    visible = visible_models(records)
+    assert set(visible) == {"dreamina-seedance-2-0-fast-260128", "wan2.7-t2v"}
+
+
 def test_protocol_routes_are_explicit():
     byteplus_video = KNOWN_MODELS["dreamina-seedance-2-0-fast-260128"]
     assert byteplus_video.submit_path.startswith("/byteplus/api/v3/")
@@ -52,6 +65,8 @@ def test_protocol_routes_are_explicit():
     assert bailian_edit.protocol == "openai-multipart"
     assert bailian_edit.submit_path == "/v1/images/edits"
     assert KNOWN_MODELS["wan2.7-i2v"].cancel_path is None
+    assert KNOWN_MODELS["wan2.7-i2v"].required_input_types == ("image",)
+    assert KNOWN_MODELS["wan2.7-t2v"].required_input_types == ("text",)
     assert KNOWN_MODELS["fun-asr"].query_path == "/api/v1/tasks/{task_id}"
     assert KNOWN_MODELS["qwen-image-3.0-pro"].query_path == "/api/v1/tasks/{task_id}"
     assert KNOWN_MODELS["qwen-image-3.0-pro"].cancel_method == "POST"

@@ -24,6 +24,7 @@ class GatewayModel:
     cancel_path: str | None = None
     input_types: tuple[str, ...] = ("text",)
     cancel_method: str = "DELETE"
+    required_input_types: tuple[str, ...] = ("text",)
 
 
 BYTEPLUS_CHAT = (
@@ -62,7 +63,7 @@ BAILIAN_TTS = (
 )
 BAILIAN_VIDEO = (
     "wan2.2-i2v-flash", "wan2.2-i2v-plus", "wan2.5-i2v-preview", "wan2.7-i2v",
-    "wan2.7-t2v",
+    "wan2.7-t2v", "wan3.0-video-prime",
 )
 BAILIAN_IMAGE_VIDEO = ("wan2.7-image", "wan2.7-image-pro")
 BAILIAN_STT = ("fun-asr",)
@@ -102,7 +103,8 @@ def _entries() -> tuple[GatewayModel, ...]:
         entries.append(GatewayModel(model, "ali", "video_generation", "bailian-task",
                                     "/api/v1/services/aigc/video-generation/video-synthesis",
                                     "/api/v1/tasks/{task_id}", None,
-                                    ("text", "image", "audio")))
+                                    ("text", "image", "audio"), "DELETE",
+                                    ("image",) if "-i2v" in model else ("text",)))
     for model in BAILIAN_IMAGE_VIDEO:
         entries.append(GatewayModel(model, "ali", "image_generation", "bailian-task",
                                     "/api/v1/services/aigc/image-generation/generation",
@@ -149,6 +151,7 @@ def _override_entries() -> dict[str, GatewayModel]:
             cancel_path=value.get("cancel_path", base.cancel_path),
             cancel_method=str(value.get("cancel_method", base.cancel_method)),
             input_types=tuple(value.get("input_types", base.input_types)),
+            required_input_types=tuple(value.get("required_input_types", base.required_input_types)),
         )
     return result
 
@@ -171,10 +174,26 @@ def visible_models(model_records: Iterable[dict[str, Any]]) -> dict[str, Gateway
         owner = str(record.get("owned_by", "")).strip()
         item = catalog.get(model_id)
         endpoint_types = record.get("supported_endpoint_types")
-        supports_openai = endpoint_types is None or "openai" in endpoint_types
-        if item is not None and owner == item.channel and supports_openai:
+        if item is not None and owner == item.channel and _supports_protocol(item, endpoint_types):
             visible[model_id] = item
     return visible
+
+
+def _supports_protocol(item: GatewayModel, endpoint_types: Any) -> bool:
+    if endpoint_types is None:
+        return True
+    if not isinstance(endpoint_types, (list, tuple, set)):
+        return False
+    advertised = {str(value) for value in endpoint_types}
+    accepted = {
+        "openai-compatible": {"openai"},
+        "openai-multipart": {"openai"},
+        "byteplus-official": {"openai", "byteplus-openai"},
+        "byteplus-task": {"byteplus-seedance", "configurable-task"},
+        "bailian-native": {"openai", "configurable-task"},
+        "bailian-task": {"openai", "legacy-video", "configurable-task"},
+    }.get(item.protocol, set())
+    return bool(advertised & accepted)
 
 
 def require_model(model_id: str, capability: str, visible: dict[str, GatewayModel]) -> GatewayModel:
