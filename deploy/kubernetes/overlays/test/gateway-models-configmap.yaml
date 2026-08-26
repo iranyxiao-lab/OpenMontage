@@ -7,6 +7,7 @@ metadata:
     app.kubernetes.io/name: openmontage
     app.kubernetes.io/part-of: soulx
 data:
-  # Non-sensitive route overrides only. The built-in registry remains the
-  # source of truth for the 84 approved models and their capabilities.
-  OPENMONTAGE_GATEWAY_MODEL_OVERRIDES: "{}"
+  # Non-sensitive protocol/readiness overrides only. Models stay visible in
+  # the catalog, but known-bad live task routes fail closed until re-verified.
+  OPENMONTAGE_GATEWAY_MODEL_OVERRIDES: >-
+    {"dreamina-seedance-2-0-fast-260128":{"status":"DISABLED","reason_code":"gateway_task_query_unavailable"},"wan2.7-i2v":{"status":"DISABLED","reason_code":"gateway_task_profile_invalid"},"wan2.7-t2v":{"status":"DISABLED","reason_code":"gateway_task_profile_invalid"}}
