@@ -590,8 +590,9 @@ class Runner:
 
     def _success(self, command: Command, checkpoint: Ref | None = None, artifacts: list[dict[str, Any]] | None = None, deterministic: bool = False) -> Event:
         now = datetime.now(timezone.utc)
+        approval_stages = command.approvalStages if command.approvalStages is not None else ["proposal", "scene_plan"]
         event_type = "TaskSucceeded" if command.stage == "publish" else (
-            "ApprovalRequired" if command.stage in {"idea", "proposal", "scene_plan"} else "StageSucceeded"
+            "ApprovalRequired" if command.stage in approval_stages else "StageSucceeded"
         )
         return Event(schemaVersion="openmontage.event.v1", eventId=f"event-{uuid.uuid4().hex}",
                      jobId=command.jobId, taskId=command.taskId, runId=command.runId,

@@ -500,6 +500,24 @@ def test_proposal_emits_approval_with_previewable_stage_artifact(tmp_path):
     assert "A concise product launch" not in event.model_dump_json()
 
 
+def test_server_resolved_approval_stages_can_auto_advance_proposal(tmp_path):
+    command = Command.model_validate(fixture("valid-command.json")).model_copy(update={
+        "stage": "proposal",
+        "approvalStages": [],
+        "pipelineStages": ["intake", "research", "proposal", "script", "scene_plan", "publish"],
+        "userIntent": UserIntent.model_validate({
+            "brief": "An auto-approved internal draft",
+            "sources": [{"kind": "prompt"}],
+            "production": {"durationSeconds": 8, "aspectRatio": "16:9", "resolution": "720p",
+                           "language": "en-US", "voice": "neutral", "subtitleStyle": "none",
+                           "music": "none", "visualStyle": "cinematic", "budgetTier": "economy"},
+        }),
+    })
+    config = RunnerConfig(workspace_root=str(tmp_path))
+    event = Runner(config, executor=StageExecutor(config, agent=_StructuredAgent())).handle(command)
+    assert event.type == "StageSucceeded"
+
+
 def test_scene_regeneration_reuses_other_scene_clips(tmp_path, monkeypatch):
     intent = UserIntent.model_validate({
         "brief": "Regenerate only the middle scene",

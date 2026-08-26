@@ -145,14 +145,22 @@ class Command(StrictModel):
     trace: Trace
     userIntent: UserIntent | None = None
     pipelineStages: list[str] | None = Field(default=None, min_length=1, max_length=32)
+    approvalStages: list[str] | None = Field(default=None, max_length=32)
 
-    @field_validator("pipelineStages")
+    @field_validator("pipelineStages", "approvalStages")
     @classmethod
     def valid_pipeline_stages(cls, value: list[str] | None) -> list[str] | None:
         if value is not None:
             if len(set(value)) != len(value) or any(not re.fullmatch(r"[a-z][a-z_]{0,31}", stage) for stage in value):
                 raise ValueError("invalid pipeline stages")
         return value
+
+    @model_validator(mode="after")
+    def approval_stages_belong_to_pipeline(self) -> "Command":
+        if self.approvalStages is not None and self.pipelineStages is not None:
+            if any(stage not in self.pipelineStages for stage in self.approvalStages):
+                raise ValueError("approval stage is not in pipeline")
+        return self
 
     @model_validator(mode="after")
     def no_sensitive_material(self) -> "Command":
