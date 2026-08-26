@@ -135,6 +135,38 @@ def test_task_submission_is_not_retried(monkeypatch):
     assert len(calls) == 2  # one catalog read and one non-retried submit
 
 
+def test_bailian_video_submission_enables_async_protocol(monkeypatch):
+    from tools.gateway_model_catalog import KNOWN_MODELS
+
+    config = GatewayConfig("http://gateway.example", "secret-key", "sondo")
+    calls = []
+
+    class Response:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"output": {"task_id": "task-1", "task_status": "PENDING"}}
+
+    monkeypatch.setattr(
+        "tools.gateway_client.GatewayClient.resolve_model",
+        lambda self, model, capability: KNOWN_MODELS["wan2.7-t2v"],
+    )
+    monkeypatch.setattr(
+        "tools.gateway_client.requests.request",
+        lambda *args, **kwargs: calls.append(kwargs) or Response(),
+    )
+
+    GatewayClient(config).submit_task(
+        model="wan2.7-t2v",
+        capability="video_generation",
+        payload={"model": "wan2.7-t2v", "input": {"prompt": "test"}},
+    )
+    assert calls[0]["headers"]["X-DashScope-Async"] == "enable"
+
+
 def test_error_redaction_removes_key_and_urls(monkeypatch):
     monkeypatch.setenv("OPENMONTAGE_GATEWAY_API_KEY", "secret-key")
     safe = redact_error("secret-key https://gateway.example/v1?signature=abc details")
