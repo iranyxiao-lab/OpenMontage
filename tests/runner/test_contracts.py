@@ -221,7 +221,7 @@ def test_non_publish_checkpoint_contains_canonical_artifact_metadata(tmp_path):
     assert payload["result"]["artifactStatus"] == "completed"
     assert payload["result"]["sceneCount"] >= 1
     assert artifact["scenes"][0]["sceneId"] == "scene-1"
-    assert artifact["director"]["skill"] == "pipelines/animated-explainer/scene-director"
+    assert artifact["director"]["skill"] == "pipelines/explainer/scene-director"
 
 
 def test_manifest_specific_character_stage_produces_director_artifact(tmp_path):
