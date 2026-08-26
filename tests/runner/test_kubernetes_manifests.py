@@ -149,7 +149,14 @@ def test_test_overlay_injects_non_sensitive_gateway_model_catalog():
     config = next(doc for doc in docs(overlay / "gateway-models-configmap.yaml") if doc["kind"] == "ConfigMap")
     assert config["metadata"]["name"] == "openmontage-gateway-models"
     assert config["metadata"]["namespace"] == "openmontage-test"
-    assert config["data"] == {"OPENMONTAGE_GATEWAY_MODEL_OVERRIDES": "{}"}
+    overrides = json.loads(config["data"]["OPENMONTAGE_GATEWAY_MODEL_OVERRIDES"])
+    assert set(overrides) == {
+        "dreamina-seedance-2-0-fast-260128",
+        "wan2.7-i2v",
+        "wan2.7-t2v",
+    }
+    assert all(item["status"] == "DISABLED" for item in overrides.values())
+    assert all(item["reason_code"].startswith("gateway_") for item in overrides.values())
     assert "SECRET" not in config["data"]
     kustomization = (overlay / "kustomization.yaml").read_text(encoding="utf-8")
     assert "gateway-models-configmap.yaml" in kustomization
