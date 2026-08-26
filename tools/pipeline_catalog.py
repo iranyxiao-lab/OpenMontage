@@ -188,7 +188,8 @@ def pipeline_catalog_payload(defs_dir: Path | None = None, tool_registry: ToolRe
                     "provider": item.channel,
                     "channel": item.channel,
                     "capability": item.capability,
-                    "status": "READY",
+                    "status": item.status,
+                    "reasonCode": item.reason_code,
                     "inputTypes": list(item.input_types),
                     "requiredInputTypes": list(item.required_input_types),
                 })

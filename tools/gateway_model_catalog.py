@@ -25,6 +25,8 @@ class GatewayModel:
     input_types: tuple[str, ...] = ("text",)
     cancel_method: str = "DELETE"
     required_input_types: tuple[str, ...] = ("text",)
+    status: str = "READY"
+    reason_code: str | None = None
 
 
 BYTEPLUS_CHAT = (
@@ -152,6 +154,8 @@ def _override_entries() -> dict[str, GatewayModel]:
             cancel_method=str(value.get("cancel_method", base.cancel_method)),
             input_types=tuple(value.get("input_types", base.input_types)),
             required_input_types=tuple(value.get("required_input_types", base.required_input_types)),
+            status=str(value.get("status", value.get("availability", base.status))).upper(),
+            reason_code=value.get("reason_code", base.reason_code),
         )
     return result
 
@@ -200,6 +204,8 @@ def require_model(model_id: str, capability: str, visible: dict[str, GatewayMode
     item = visible.get(model_id)
     if item is None:
         raise ValueError(f"gateway model is unavailable: {model_id}")
+    if item.status != "READY":
+        raise ValueError(f"gateway model is not ready: {model_id}")
     if item.capability != capability:
         raise ValueError(f"gateway model {model_id} does not support {capability}")
     return item

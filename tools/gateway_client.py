@@ -251,6 +251,12 @@ class GatewayClient:
         item = self.catalog().get(model)
         if item is None:
             raise GatewayRequestError(f"gateway model is unavailable: {model}")
+        if item.status != "READY":
+            reason = item.reason_code or "gateway_model_not_ready"
+            raise GatewayRequestError(
+                f"gateway model is not ready: {model} ({reason})",
+                code=reason,
+            )
         if item.capability != capability:
             raise GatewayRequestError(f"gateway model {model} does not support {capability}")
         return item

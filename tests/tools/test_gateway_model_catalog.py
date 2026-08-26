@@ -79,3 +79,15 @@ def test_require_model_fails_closed_for_missing_or_wrong_capability():
         require_model("qwen-max", "chat", visible)
     with pytest.raises(ValueError, match="does not support"):
         require_model("qwen-plus", "image_generation", visible)
+
+
+def test_model_readiness_override_is_preserved_in_runtime_catalog(monkeypatch):
+    monkeypatch.setenv(
+        "OPENMONTAGE_GATEWAY_MODEL_OVERRIDES",
+        '{"dreamina-seedance-2-0-fast-260128": {"status": "DISABLED", "reason_code": "gateway_task_query_unavailable"}}',
+    )
+    item = model_catalog()["dreamina-seedance-2-0-fast-260128"]
+    assert item.status == "DISABLED"
+    assert item.reason_code == "gateway_task_query_unavailable"
+    with pytest.raises(ValueError, match="not ready"):
+        require_model(item.model_id, "video_generation", {item.model_id: item})
