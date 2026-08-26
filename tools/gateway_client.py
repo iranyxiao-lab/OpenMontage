@@ -141,8 +141,10 @@ class GatewayClient:
         payload: dict[str, Any] | None = None,
         timeout: float = 120.0,
         retryable: bool = True,
+        extra_headers: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         url = f"{self.config.base_url}/{path.lstrip('/')}"
+        headers = {**self._headers, **(extra_headers or {})}
         last_error: BaseException | None = None
         attempts = 3 if retryable else 1
         for attempt in range(attempts):
@@ -150,7 +152,7 @@ class GatewayClient:
                 response = requests.request(
                     method,
                     url,
-                    headers=self._headers,
+                    headers=headers,
                     json=payload,
                     timeout=timeout,
                 )
@@ -424,9 +426,11 @@ class GatewayClient:
 
     def submit_task(self, *, model: str, capability: str, payload: dict[str, Any], timeout: float = 120.0) -> dict[str, Any]:
         """Submit a paid async task without retrying an ambiguous write."""
-
-        return self.model_request(
-            model=model, capability=capability, payload=payload, timeout=timeout, retryable=False
+        item = self.resolve_model(model, capability)
+        extra_headers = {"X-DashScope-Async": "enable"} if item.protocol == "bailian-task" else None
+        return self.request_json(
+            "POST", item.submit_path, payload=payload, timeout=timeout,
+            retryable=False, extra_headers=extra_headers,
         )
 
     def task(self, *, model: str, capability: str, task_id: str, timeout: float = 60.0) -> dict[str, Any]:
